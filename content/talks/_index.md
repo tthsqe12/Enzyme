@@ -15,9 +15,9 @@ weight: 100
 
 ## Upcoming talks or presentations
 
-* LLVM Dev Meeting 2021 [How to Use Enzyme to Automatically Differentiate Any LLVM-based Language for CPU, GPU, and More](https://llvm.swoogo.com/2021devmtg/agenda); William S. Moses, Valentin Churavy; video; [slides](https://c.wsmoses.com/presentations/enzyme-sc.pdf)
-
 ## Tech talks
+
+* LLVM Dev Meeting 2021 [How to Use Enzyme to Automatically Differentiate Any LLVM-based Language for CPU, GPU, and More](https://llvm.swoogo.com/2021devmtg/agenda); William S. Moses, Valentin Churavy; video; [slides](https://c.wsmoses.com/presentations/enzyme-sc.pdf)
 
 * SC 21, [Reverse-Mode Automatic Differentiation and Optimization of GPU Kernels via Enzyme](https://dl.acm.org/doi/abs/10.1145/3458817.3476165); William S. Moses, Valentin Churavy, Ludger Paehler, Jan Hückelheim, Sri Hari Krishna Narayanan, Michel Schanen, and Johannes Doerfert; video; slides
 
