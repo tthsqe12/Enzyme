@@ -1,0 +1,8 @@
+sphinx==4.3
+-e git+https://github.com/EnzymeAD/enzyme_sphinx_theme.git#egg=enzyme_sphinx_theme
+sphinxcontrib.katex
+sphinxcontrib-httpdomain
+breathe
+exhale
+docutils
+matplotlib
