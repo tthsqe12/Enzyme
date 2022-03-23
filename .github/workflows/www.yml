@@ -13,7 +13,10 @@ jobs:
         with:
           submodules: true
       - name: Build
-        run: make html && echo -n enzyme.mit.edu > ./public/CNAME
+        run: |
+          sudo python3 -m pip install requirements.txt
+          make html
+          echo -n enzyme.mit.edu > ./public/CNAME
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
