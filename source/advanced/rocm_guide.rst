@@ -1,4 +1,0 @@
-.. _rocm-guide:
-
-ROCm
-====

@@ -1,4 +1,0 @@
-.. _glossary:
-
-Glossary
-========
