@@ -24,7 +24,6 @@ jobs:
       
       - name: Build docs
         run: |
-          source env/bin/activate
           make html
           echo -n enzyme.mit.edu > ./build/html/CNAME
 
