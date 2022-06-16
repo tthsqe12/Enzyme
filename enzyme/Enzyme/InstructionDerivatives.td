@@ -9,6 +9,10 @@ class Inst<string mnemonic> {
   string name = mnemonic;
 }
 
+class Intr<string mnemonic> {
+  string name = mnemonic;
+}
+
 // Define ops to rewrite.
 def T1: Type;
 
@@ -18,7 +22,11 @@ def FSub : Inst<"FSub">;
 def FMul : Inst<"FMul">;
 def FNeg : Inst<"FNeg">;
 
-def DifR : Inst<"DifR">;
+//def DifR : Inst<"DifR">;
+
+
+def Sqrt : Intr<"Sqrt">;
+
 
 // Same function as the one being called
 def SameFunc {
@@ -59,6 +67,18 @@ class Shadow<string val> {
 def : CallPattern<(Op $x),
                   ["atan", "atanf", "atanl", "__fd_atan_1"],
                   [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), (FMul $x, $x)))]
+                  >;
+
+def : CallPattern<(Op $x),
+                  ["asin", "asinf", "asinl"],
+                  [(FDiv (DiffeRet<"">), 
+                  (Call<(SameTypesFunc<"sqrt">), [ReadNone,NoUnwind]> (FSub (ConstantFP<"1.0"> $x), (FMul $x, $x)))  )]
+                  >;
+
+def : CallPattern<(Op $x),
+                  ["log1p", "log1pf", "log1pl"],
+                  [(FDiv (DiffeRet<"">), 
+                  (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallPattern<(Op $y, $x),
@@ -102,3 +122,7 @@ def : CallPattern<(Op $x),
 def : CallPattern<(Op $x),
                   ["sinhf"],
                   [(FMul (DiffeRet<"">), (Call<(SameTypesFunc<"coshf">), [ReadNone,NoUnwind]> $x))]>;
+
+//def : CallPattern<(Op $x),
+//                  ["sin"],
+//                  [(FMul (DiffeRet<"">), (Call<(SameTypesFunc<"sin">), [ReadNone,NoUnwind]> $x))]>;
