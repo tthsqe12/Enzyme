@@ -10,7 +10,7 @@ function(enzyme_tablegen ofn)
       PARENT_SCOPE)
 endfunction()
 
-set(LLVM_TARGET_DEFINITIONS InstructionDerivatives.td)
+set(LLVM_TARGET_DEFINITIONS targets/InstructionDerivatives.td)
 enzyme_tablegen(InstructionDerivatives.inc -gen-derivatives)
 add_public_tablegen_target(MLIRArithmeticCanonicalizationIncGen)
 

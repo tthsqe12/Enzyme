@@ -8578,12 +8578,14 @@ public:
     }
 
     if (!called || called->empty()) {
-      std::string prefix, suffix;
-      std::string found = extractBLAS(funcName, prefix, suffix);
-      if (found.size()) {
-        if (handleBLAS(call, called, found, prefix, suffix, uncacheable_args))
+      if (auto blas = extractBLAS(funcName)) {
+        if (handleBLAS(call, called, blas, uncacheable_args))
           return;
       }
+      // std::string prefix, suffix;
+      // std::string found = extractBLAS(funcName, prefix, suffix);
+      // if (found.size()) {
+      // }
     }
 
     if (funcName == "printf" || funcName == "puts" ||

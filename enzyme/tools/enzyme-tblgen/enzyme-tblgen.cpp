@@ -297,11 +297,8 @@ bool handle(raw_ostream &os, Record *pattern, Init *resultTree,
   PrintFatalError(pattern->getLoc(), Twine("unknown dag"));
 }
 
-static void emitDerivatives(const RecordKeeper &recordKeeper, raw_ostream &os) {
-  emitSourceFileHeader("Rewriters", os);
-  const auto &patterns = recordKeeper.getAllDerivedDefinitions("CallPattern");
-  Record *attrClass = recordKeeper.getClass("Attr");
-
+void emitFullDerivatives(const std::vector<Record *> &patterns,
+                         raw_ostream &os) {
   // Ensure unique patterns simply by appending unique suffix.
   unsigned rewritePatternCount = 0;
   std::string baseRewriteName = "GeneratedConvert";
@@ -468,6 +465,96 @@ static void emitDerivatives(const RecordKeeper &recordKeeper, raw_ostream &os) {
 
     os << "    return;\n  }\n";
   }
+}
+
+struct {
+  std::string floatType;
+  std::string prefix;
+  std::string suffix;
+  std::string function;
+} BlasInfo;
+
+std::optional<BlasInfo>
+extractBLAS(StringRef in, std::string &prefix, std::string &suffix) {
+  std::string floatType[] = {"s", "d"}; // c, z
+  std::string extractable[] = {"dot", "nrm2"};
+  std::string prefixes[] = {"", "cblas_", "cublas_"};
+  std::string suffixes[] = {"", "_", "_64_"};
+  for (auto t : floatType) {
+    for (auto ex : extractable) {
+      for (auto p : prefixes) {
+        for (auto s : suffixes) {
+          if (in == p + ex + s) {
+            return BlasInfo {
+              floatType = t;
+              prefix = p;
+              suffix = s;
+              function = ex;
+            }
+          }
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
+                         raw_ostream &os) {}
+void handleSingleBlas(const Record &blasPattern, llvm::CallInst &call,
+                      Function *called) {
+  IntegerType *intType = dyn_cast<IntegerType>(call.getOperand(0)->getType());
+  bool byRef = false;
+  if (!intType) {
+    auto PT = cast<PointerType>(call.getOperand(0)->getType());
+    if (suffix.contains("64"))
+      intType = IntegerType::get(PT->getContext(), 64);
+    else
+      intType = IntegerType::get(PT->getContext(), 32);
+    byRef = true;
+  }
+
+  if (byRef) {
+    // count must be preserved if overwritten
+    if (uncacheable_args.find(countarg)->second) {
+      cacheTypes.push_back(intType);
+      countcache = true;
+    }
+  }
+
+  // Handle input parameters based on specification
+  ListInit *argTypes = pattern->getValueAsListInit("inputTypes");
+  int numTypes = 0;
+  for (auto argType : llvm::enumerate(*argTypes)) {
+    size_t argIdx = argType.index();
+    BLASType *resultType = cast<BLASType>(argType.value());
+    numTypes += resultType.nelem;
+  }
+  // We want to classify each input parameter
+  assert(numTypes == LLVMCountParams(call));
+}
+
+void toCache(size_t argPos, Argument funcArg) {
+
+  bool xcache = !gutils->isConstantValue(call.getArgOperand(argPos)) &&
+                uncacheable_args.find(funcarg)->second;
+  if (!xache)
+    return;
+  if ((Mode == DerivativeMode::ReverseModeCombined ||
+       Mode == DerivativeMode::ReverseModePrimal) {
+  }
+}
+
+static void emitDerivatives(const RecordKeeper &RK, raw_ostream &os) {
+  emitSourceFileHeader("Rewriters", os);
+  const auto &patterns = RK.getAllDerivedDefinitions("CallPattern");
+  const auto &blasPatterns = RK.getAllDerivedDefinitions("CallBlasPattern");
+  Record *attrClass = RK.getClass("Attr");
+
+  // We have full access to the source code to differentiate it
+  emitFullDerivatives(patterns, os);
+  // Improve UX / comp-time by handling Blas calls extra.
+  emitBlasDerivatives(blasPatterns, os);
 }
 
 static bool EnzymeTableGenMain(raw_ostream &os, RecordKeeper &records) {

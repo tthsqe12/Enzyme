@@ -25,8 +25,6 @@ def FNeg : Inst<"FNeg">;
 //def DifR : Inst<"DifR">;
 
 
-def Sqrt : Intr<"Sqrt">;
-
 
 // Same function as the one being called
 def SameFunc {
@@ -45,11 +43,18 @@ class Attribute<string name_> {
 def ReadNone : Attribute<"ReadNone">;
 def ReadOnly : Attribute<"ReadOnly">;
 def NoUnwind : Attribute<"NoUnwind">;
+def NoCapture : Attribute<"NoCapture">;
+def WriteOnly : Attribute<"WriteOnly">;
+def ArgMemOnly : Attribute<"ArgMemOnly">;
+def AlwaysInline : Attribute<"AlwaysInline">;
+
 
 class Call<dag mnemonic, list<Attribute> _fnattrs=[]> {
   dag func = mnemonic;
   list<Attribute> fnattrs = _fnattrs;
 }
+def SameSqrt : Call<(SameTypesFunc<"sqrt">), [ReadNone,NoUnwind]>;
+
 
 def Op {
 }
@@ -64,6 +69,24 @@ class DiffeRet<string val> {
 class Shadow<string val> {
 }
 
+// scalar floating point from BLAS
+
+class BLASType;
+
+class fp {}
+class vfp {}
+class len<int _n> {
+  int n = _n;
+}
+class lda<int _n> {
+  int n = _n;
+}
+
+
+
+
+                  
+
 def : CallPattern<(Op $x),
                   ["atan", "atanf", "atanl", "__fd_atan_1"],
                   [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), (FMul $x, $x)))]
@@ -71,14 +94,12 @@ def : CallPattern<(Op $x),
 
 def : CallPattern<(Op $x),
                   ["asin", "asinf", "asinl"],
-                  [(FDiv (DiffeRet<"">), 
-                  (Call<(SameTypesFunc<"sqrt">), [ReadNone,NoUnwind]> (FSub (ConstantFP<"1.0"> $x), (FMul $x, $x)))  )]
+                  [(FDiv (DiffeRet<"">), (SameSqrt (FSub (ConstantFP<"1.0"> $x), (FMul $x, $x)))  )]
                   >;
 
 def : CallPattern<(Op $x),
                   ["log1p", "log1pf", "log1pl"],
-                  [(FDiv (DiffeRet<"">), 
-                  (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallPattern<(Op $y, $x),
@@ -123,6 +144,4 @@ def : CallPattern<(Op $x),
                   ["sinhf"],
                   [(FMul (DiffeRet<"">), (Call<(SameTypesFunc<"coshf">), [ReadNone,NoUnwind]> $x))]>;
 
-//def : CallPattern<(Op $x),
-//                  ["sin"],
-//                  [(FMul (DiffeRet<"">), (Call<(SameTypesFunc<"sin">), [ReadNone,NoUnwind]> $x))]>;
+include "targets/BlasDerivatives.td"
