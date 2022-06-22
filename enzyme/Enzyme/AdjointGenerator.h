@@ -8583,7 +8583,7 @@ public:
 
     if (!called || called->empty()) {
       if (auto blas = extractBLAS(funcName)) {
-        if (handleBLAS(call, called, blas, uncacheable_args))
+        if (handleBLAS(call, called, blas.getValue(), uncacheable_args))
           return;
         // else panic?
       }

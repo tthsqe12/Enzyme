@@ -467,94 +467,151 @@ void emitFullDerivatives(const std::vector<Record *> &patterns,
   }
 }
 
-struct {
-  std::string floatType;
-  std::string prefix;
-  std::string suffix;
-  std::string function;
-} BlasInfo;
+// void handleSingleBlas(const Record &blasPattern, llvm::CallInst &call,
+//                       Function *called) {
+//   IntegerType *intType =
+//   dyn_cast<IntegerType>(call.getOperand(0)->getType()); bool byRef = false;
+//   if (!intType) {
+//     auto PT = cast<PointerType>(call.getOperand(0)->getType());
+//     if (suffix.contains("64"))
+//       intType = IntegerType::get(PT->getContext(), 64);
+//     else
+//       intType = IntegerType::get(PT->getContext(), 32);
+//     byRef = true;
+//   }
+//
+//   if (byRef) {
+//     // count must be preserved if overwritten
+//     if (uncacheable_args.find(countarg)->second) {
+//       cacheTypes.push_back(intType);
+//       countcache = true;
+//     }
+//   }
+//
+//   // Handle input parameters based on specification
+//   ListInit *argTypes = pattern->getValueAsListInit("inputTypes");
+//   int numTypes = 0;
+//   for (auto argType : llvm::enumerate(*argTypes)) {
+//     size_t argIdx = argType.index();
+//     BLASType *resultType = cast<BLASType>(argType.value());
+//     numTypes += resultType.nelem;
+//   }
+//   // We want to classify each input parameter
+//   assert(numTypes == LLVMCountParams(call));
+// }
 
-std::optional<BlasInfo>
-extractBLAS(StringRef in, std::string &prefix, std::string &suffix) {
-  std::string floatType[] = {"s", "d"}; // c, z
-  std::string extractable[] = {"dot", "nrm2"};
-  std::string prefixes[] = {"", "cblas_", "cublas_"};
-  std::string suffixes[] = {"", "_", "_64_"};
-  for (auto t : floatType) {
-    for (auto ex : extractable) {
-      for (auto p : prefixes) {
-        for (auto s : suffixes) {
-          if (in == p + ex + s) {
-            return BlasInfo {
-              floatType = t;
-              prefix = p;
-              suffix = s;
-              function = ex;
-            }
-          }
-        }
+// void toCache(size_t argPos, Argument funcArg) {
+//
+//   bool xcache = !gutils->isConstantValue(call.getArgOperand(argPos)) &&
+//                 uncacheable_args.find(funcarg)->second;
+//   if (!xache)
+//     return;
+//   if ((Mode == DerivativeMode::ReverseModeCombined ||
+//        Mode == DerivativeMode::ReverseModePrimal) {
+//   }
+// }
+
+// std::string read_uplo(llvm::CallInst &call, size_t pos) {
+//   std::string s = call.getArgOperand(pos)->getValue();
+//   if (s == "U")
+//     return "U";
+//   if (s == "L")
+//     return "L";
+//   assert(false && "failed reading uplo");
+// }
+
+void genEnumMatcher(const std::vector<Record *> &blas_modes, raw_ostream &os) {
+
+  for (auto mode : blas_modes) {
+    auto name = mode->getName();
+    auto sub_modes = mode->getValueAsListOfStrings("modes");
+    llvm::errs() << "std::string read_" << name
+                 << "(llvm::CallInst &call, size_t pos) {\n"
+                 << "  std::string s = call.getArgOperand(pos)->getValue();\n";
+    for (auto sub_mode : sub_modes) {
+      llvm::errs() << "  if (s == \"" << sub_mode << "\")\n"
+                   << "    return \"" << sub_mode << "\";\n";
+    }
+    llvm::errs() << "  assert(false && \"failed reading " << name << "\");\n"
+                 << "}\n\n";
+  }
+}
+
+void writeEnums(Record *pattern, const std::vector<Record *> &blas_modes,
+                raw_ostream &os) {
+  std::vector<Record *> inputTypes =
+      pattern->getValueAsListOfDefs("inputTypes");
+  for (auto inputType : inputTypes) {
+    if (inputType->isSubClassOf("blas_modes")) {
+      llvm::errs() << inputType->getName() << ": ";
+      for (auto a : inputType->getValueAsListOfStrings("modes")) {
+        llvm::errs() << a << " ";
       }
+      llvm::errs() << "\n";
     }
   }
-  return std::nullopt;
+  DagInit *tree = pattern->getValueAsDag("PatternToMatch");
+  for (int i = 0, e = tree->getNumArgs(); i != e; ++i) {
+    // llvm::errs() << tree->getArgNameStr(i) << " ";
+    //  auto optns = blas_arg->getValueAsListOfStrings("modes");
+    //  for (auto optn : optns)
+    //    llvm::errs() << optn << " ";
+    //  }
+  }
+}
+
+void readLength() {}
+
+void checkSingleBlasPattern(Record *pattern) {
+  // verify correctness of declarations in td file
+  auto name = pattern->getValue("names")[0];
+  std::vector<Record *> inputTypes =
+      pattern->getValueAsListOfDefs("inputTypes");
+  int numTypes = 0;
+  std::vector<size_t> activeArgs;
+  for (auto inputType : inputTypes) {
+    auto val = inputType;
+    if (val->getValueAsBit("active"))
+      activeArgs.push_back(numTypes);
+    numTypes += val->getValueAsInt("nelem");
+  }
+
+  // TODO: assert that blas_modes are comptime (wait is that true?)
+
+  DagInit *tree = pattern->getValueAsDag("PatternToMatch");
+  int lenDagArgs = tree->getNumArgs();
+  llvm::errs() << activeArgs.size() << name;
+  assert(numTypes == lenDagArgs);
 }
 
 void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
-                         raw_ostream &os) {}
-void handleSingleBlas(const Record &blasPattern, llvm::CallInst &call,
-                      Function *called) {
-  IntegerType *intType = dyn_cast<IntegerType>(call.getOperand(0)->getType());
-  bool byRef = false;
-  if (!intType) {
-    auto PT = cast<PointerType>(call.getOperand(0)->getType());
-    if (suffix.contains("64"))
-      intType = IntegerType::get(PT->getContext(), 64);
-    else
-      intType = IntegerType::get(PT->getContext(), 32);
-    byRef = true;
+                         const std::vector<Record *> &blas_modes,
+                         raw_ostream &os) {
+  genEnumMatcher(blas_modes, os);
+  for (auto pattern : blasPatterns) {
+    checkSingleBlasPattern(pattern);
+    writeEnums(pattern, blas_modes, os);
   }
-
-  if (byRef) {
-    // count must be preserved if overwritten
-    if (uncacheable_args.find(countarg)->second) {
-      cacheTypes.push_back(intType);
-      countcache = true;
-    }
-  }
-
-  // Handle input parameters based on specification
-  ListInit *argTypes = pattern->getValueAsListInit("inputTypes");
-  int numTypes = 0;
-  for (auto argType : llvm::enumerate(*argTypes)) {
-    size_t argIdx = argType.index();
-    BLASType *resultType = cast<BLASType>(argType.value());
-    numTypes += resultType.nelem;
-  }
-  // We want to classify each input parameter
-  assert(numTypes == LLVMCountParams(call));
-}
-
-void toCache(size_t argPos, Argument funcArg) {
-
-  bool xcache = !gutils->isConstantValue(call.getArgOperand(argPos)) &&
-                uncacheable_args.find(funcarg)->second;
-  if (!xache)
-    return;
-  if ((Mode == DerivativeMode::ReverseModeCombined ||
-       Mode == DerivativeMode::ReverseModePrimal) {
-  }
+  // llvm::errs() << blas_modes.size() << "\n";
+  // for (auto mode : blas_modes) {
+  //   auto optns = mode->getValueAsListOfStrings("modes");
+  //   for (auto optn : optns)
+  //     llvm::errs() << optn << " ";
+  //   llvm::errs() << "\n";
+  // }
 }
 
 static void emitDerivatives(const RecordKeeper &RK, raw_ostream &os) {
   emitSourceFileHeader("Rewriters", os);
   const auto &patterns = RK.getAllDerivedDefinitions("CallPattern");
   const auto &blasPatterns = RK.getAllDerivedDefinitions("CallBlasPattern");
+  const auto &blas_modes = RK.getAllDerivedDefinitions("blas_modes");
   Record *attrClass = RK.getClass("Attr");
 
   // We have full access to the source code to differentiate it
-  emitFullDerivatives(patterns, os);
+  // emitFullDerivatives(patterns, os);
   // Improve UX / comp-time by handling Blas calls extra.
-  emitBlasDerivatives(blasPatterns, os);
+  emitBlasDerivatives(blasPatterns, blas_modes, os);
 }
 
 static bool EnzymeTableGenMain(raw_ostream &os, RecordKeeper &records) {

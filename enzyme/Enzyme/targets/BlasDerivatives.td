@@ -1,33 +1,30 @@
-class BLASType<int _n, bool _active> { 
+class BLASType<int _n, bit _active> { 
   int nelem = _n; 
-  bool active = _active;
-  };
+  bit active = _active;
+  }
 
-def len<1, false> : BLASType; // num of elements
-def fp<1, true> : BLASType; // floating point
-def vinc<2, true> : BLASType; // {vector, increment}
-def ap<1, true> : BLASType; // packed array, alternative to vld
-def vld<2, true> : BLASType; // {vector, leading dim}
-def kvld<3, true> : BLASType; // {bandwith, vector, leading dim}
-def mld<2, true> : BLASType; // {matrix, leading dim}
-def mbw<2, false> : BLASType;; // matrix-bandwith}
-def hbw<1, false> : BLASType;; // half matrix-bandwith}
+def len   : BLASType<1, false>; // num of elements
+def hbw   : BLASType<1, false>; // half matrix-bandwith}
+def bw    : BLASType<1, false>; // matrix-bandwith}
+def fp    : BLASType<1, true>;  // floating point
+def ap    : BLASType<1, true>;  // packed array, alternative to vld
+def vinc  : BLASType<2, true>;  // {vector, increment}
+def vld   : BLASType<2, true>;  // {vector, leading dim}
+def mld   : BLASType<2, true>;  // {matrix, leading dim}
 
-class blas_modes<list<string> _modes> : BLASType {
-  let nelem = ?;
-  let active = ?;
+class blas_modes<list<string> _modes> : BLASType<1, false> {
   list<string> modes = _modes;
 }
 
-def cblas_layout<["CblasRowMajor","CblasColMajor"]> : blas_modes;
-def uplo<["U","L"]>  : blas_modes{}
-def cblas_uplo<["CblasUpper","CblasLower"]> : blas_modes;
-def trans<["N","T","C"]> : blas_modes;
-def cblas_trans<["CblasNoTrans","CblasTrans","CblasConjTrans"]> : blas_modes;
-def diag<["U","N"]> : blas_modes;
-def cblas_diag<["CblasUnit","CblasNonUnit"]> : blas_modes;
-def side<["L", "R"]> : blas_modes;
-def cblas_side<["CblasLeft","CblasRight"]> : blas_modes;
+def cblas_layout  : blas_modes<["CblasRowMajor","CblasColMajor"]>;
+def uplo          : blas_modes<["U","L"]> ;
+def cblas_uplo    : blas_modes<["CblasUpper","CblasLower"]> ;
+def trans         : blas_modes<["N","T","C"]> ;
+def cblas_trans   : blas_modes<["CblasNoTrans","CblasTrans","CblasConjTrans"]> ;
+def diag          : blas_modes<["U","N"]> ;
+def cblas_diag    : blas_modes<["CblasUnit","CblasNonUnit"]> ;
+def side          : blas_modes<["L", "R"]> ;
+def cblas_side    : blas_modes<["CblasLeft","CblasRight"]>;
 
 
 class BlasNames {
@@ -44,151 +41,150 @@ class CallBlasPattern<dag patternToMatch, list<string> funcNames, list<BLASType>
   list<dag> ArgDerivatives = resultOps;
 }
 
-
 // Lv 1 \wo rotations
 def : CallBlasPattern<(Op $n, $alpha, $x, $incx),
                   ["scal"],
-                  [len, fp, vinc],
-                  []
+                  [len, fp, vinc], // 1, 3
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $n, $x, $incx),
                   ["asum"],
                   [len, vinc],
-                  []
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $n, $alpha, $x, $incx, $y, $yinc),
                   ["axpy"],
                   [len, fp, vinc, vinc],
-                  []
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   ["copy"],
                   [len, vinc, vinc],
-                  []
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   ["swap"],
                   [len, vinc, vinc],
-                  []
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   ["dot"],
                   [len, vinc, vinc],
-                  []
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $n, $x, $incx),
                   ["nrm2"],
                   [len, vinc],
-                  []
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 // Lv 2
 def : CallBlasPattern<(Op $layout, $transa, $m, $n, $alpha, $a, $lda, $x, $incx, $beta, $y, $incy),
                   ["gemv"],
-                  [layout, trans, len, len, fp, mld],
-                  []
+                  [cblas_layout, trans, len, len, fp, mld, vinc, fp, vinc],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $m, $n, $alpha, $x, $xinc, $y, $yinc, $v, $ld),
                   ["ger"],
-                  [layout, len, len, fp, vinc, vinc, vld]
-                  []
+                  [cblas_layout, len, len, fp, vinc, vinc, vld],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $n, $alpha, $v, $ld, $x, $xinc, $beta, $y, $yinc),
                   ["spmv"],
-                trans,  [layout, uplo, len, fp, vld, vinc, fp, vinc],
-                  []
+                  [cblas_layout, uplo, len, fp, vld, vinc, fp, vinc],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $n, $alpha, $x, $incx, $v, $ld),
                   ["spr"],
-                  [layout, uplo, len, fp, vinc, vld],
-                  []
+                  [cblas_layout, uplo, len, fp, vinc, vld],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $n, $alpha, $x, $incx, $y, $incy, $v, $ld),
                   ["spr2"],
-                  [layout, uplo, len, fp, vinc, vinc, vld],
-                  []
+                  [cblas_layout, uplo, len, fp, vinc, vinc, vld],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $transa, $m, $n, $ml, $mu, $alpha, $v, $ld, $x, $xinc, $beta, $y, $yinc),
                   ["gbmv"],
-                  [layout, trans, len, len, mbw, fp, vld, vinc, fp, vinc],
-                  []
+                  [cblas_layout, trans, len, len, bw, bw, fp, vld, vinc, fp, vinc],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $n, $k, $alpha, $v, $ld, $x, $xinc, $beta, $y, $yinc),
                   ["sbmv"],
-                  [layout, uplo, len, hbw, fp, vld, vinc, fp, vinc],
-                  []
+                  [cblas_layout, uplo, len, hbw, fp, vld, vinc, fp, vinc],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $transa, $diag, $n, $v, $ld, $x, $incx),
                   ["trmv"],
-                  [layout, uplo, trans, diag, len, vld, vinc],
-                  []
+                  [cblas_layout, uplo, trans, diag, len, vld, vinc],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $transa, $diag, $n, $v, $ld, $x, $incx),
                   ["trsv"],
-                  [layout, uplo, trans, diag, len, vld, vinc],
-                  []
+                  [cblas_layout, uplo, trans, diag, len, vld, vinc],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $transa, $diag, $n, $k, $v, $ld, $x, $incx),
                   ["tbmv"],
-                  [layout, uplo, trans, diag, len, kvld, vinc],
-                  []
+                  [cblas_layout, uplo, trans, diag, len, bw, vld, vinc],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $transa, $diag, $n, $k, $v, $ld, $x, $incx),
                   ["tbsv"],
-                  [layout, uplo, trans, diag, len, kvld, vinc],
-                  []
+                  [cblas_layout, uplo, trans, diag, len, bw, vld, vinc],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 // Lv 3
 def : CallBlasPattern<(Op $layout, $transa, $transb, $l, $n, $m, $alpha, $a, $lda, $b, $ldb, $beta, $c, $ldc),
                   ["gemm"],
-                  [layout, trans, trans, len len, len, fp, vld, vld, fp, vld],
-                  []
+                  [cblas_layout, trans, trans, len, len, len, fp, vld, vld, fp, vld], // 7, 9
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $side, $uplo, $m, $n, $alpha, $a, $lda, $b, $ldb, $beta, $c, $ldc),
                   ["symm"],
-                  [layout, side, uplo, len, len, fp, vld, vld, fp, vld],
-                  []
+                  [cblas_layout, side, uplo, len, len, fp, vld, vld, fp, vld],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
-def : CallBlasPattern<(Op $layout, $side, $uplo, $transa, $m, $n, $alpha, $a, $lda, $b, $ldb),
+def : CallBlasPattern<(Op $layout, $side, $uplo, $transa, $diag, $m, $n, $alpha, $a, $lda, $b, $ldb),
                   ["trmm"],
-                  [layout, side, uplo, trans, diag, len, len, fp, vld, vld],
-                  []
+                  [cblas_layout, side, uplo, trans, diag, len, len, fp, vld, vld],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
-def : CallBlasPattern<(Op $layout, $side, $uplo, $transa, $m, $n, $alpha, $a, $lda, $b, $ldb),
+def : CallBlasPattern<(Op $layout, $side, $uplo, $transa, $diag, $m, $n, $alpha, $a, $lda, $b, $ldb),
                   ["trsm"],
-                  [layout, side, uplo, trans, diag, len, len, fp, vld, vld],
-                  []
+                  [cblas_layout, side, uplo, trans, diag, len, len, fp, vld, vld],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $trans, $n, $k, $alpha, $a, $lda, $beta, $c, $ldc),
                   ["syrk"],
-                  [layout, uplo, trans, len, len, fp, vld, fp, vld],
-                  []
+                  [cblas_layout, uplo, trans, len, len, fp, vld, fp, vld],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $trans, $n, $k, $alpha, $a, $lda, $b, $ldb, $beta, $c, $ldc),
                   ["syr2k"],
-                  [layout, uplo, trans, len, len, fp, vld, vld, fp, vld],
-                  []
+                  [cblas_layout, uplo, trans, len, len, fp, vld, vld, fp, vld],
+                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
