@@ -44,7 +44,7 @@ class CallBlasPattern<dag patternToMatch, list<string> funcNames, list<BLASType>
 // Lv 1 \wo rotations
 def : CallBlasPattern<(Op $n, $alpha, $x, $incx),
                   ["scal"],
-                  [len, fp, vinc], // 1, 3
+                  [len, fp, vinc],
                   [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 
@@ -154,7 +154,7 @@ def : CallBlasPattern<(Op $layout, $uplo, $transa, $diag, $n, $k, $v, $ld, $x, $
 // Lv 3
 def : CallBlasPattern<(Op $layout, $transa, $transb, $l, $n, $m, $alpha, $a, $lda, $b, $ldb, $beta, $c, $ldc),
                   ["gemm"],
-                  [cblas_layout, trans, trans, len, len, len, fp, vld, vld, fp, vld], // 7, 9
+                  [cblas_layout, trans, trans, len, len, len, fp, vld, vld, fp, vld],
                   [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
                   >;
 

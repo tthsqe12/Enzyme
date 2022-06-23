@@ -520,8 +520,8 @@ void emitFullDerivatives(const std::vector<Record *> &patterns,
 //   assert(false && "failed reading uplo");
 // }
 
-void genEnumMatcher(const std::vector<Record *> &blas_modes, raw_ostream &os) {
-
+// Completed :)
+void emitEnumMatcher(const std::vector<Record *> &blas_modes, raw_ostream &os) {
   for (auto mode : blas_modes) {
     auto name = mode->getName();
     auto sub_modes = mode->getValueAsListOfStrings("modes");
@@ -562,43 +562,170 @@ void writeEnums(Record *pattern, const std::vector<Record *> &blas_modes,
 
 void readLength() {}
 
-void checkSingleBlasPattern(Record *pattern) {
-  // verify correctness of declarations in td file
-  auto name = pattern->getValue("names")[0];
+void emit_castvals(Record *pattern, std::vector<size_t> activeArgs,
+                   raw_ostream &os) {
+  llvm::errs() << "Type *castvalls[" << activeArgs.size() << "];\n";
+
+  for (auto argPos : llvm::enumerate(activeArgs)) {
+    size_t argIdx = argPos.index();
+    llvm::errs() << "if (auto PT = dyn_cast<PointerType>(call.getArgOperand("
+                 << argPos.value() << ")->getType()))\n"
+                 << "  castvals[" << argIdx << "] = PT;\n"
+                 << "else\n"
+                 << "  castvals[" << argIdx
+                 << "] = PointerType::getUnqual(innerType);\n";
+  }
+  //              << "Value *undefinit = UndefValue::get(cachetype);\n"
+  llvm::errs() << "Value *cacheval;\n\n";
+}
+
+void emit_inttype(Record *pattern, raw_ostream &os) {
+  // We only look at the type of the first integer showing up.
+  // That assumes that this is also valid for all other int positions.
+  size_t firstIntPos = 0;
+  bool found = false;
+  std::vector<Record *> inputTypes =
+      pattern->getValueAsListOfDefs("inputTypes");
+  for (auto val : inputTypes) {
+    if (val->getName() == "len") {
+      found = true;
+      // llvm::errs() << "first integer at: " << firstIntPos << "\n";
+      break;
+    }
+    firstIntPos += val->getValueAsInt("nelem");
+  }
+  assert(found && "no int type found in blas call");
+
+  llvm::errs()
+      << "IntegerType *intType = dyn_cast<IntegerType>(call.getOperand("
+      << firstIntPos << ")->getType());\n"
+      << "bool byRef = false;\n"
+      << "if (!intType) {\n"
+      << "  auto PT = cast<PointerType>(call.getOperand(" << firstIntPos
+      << ")->getType());\n"
+      << "  if (blas.suffix.contains(\" 64 \"))\n"
+      << "    intType = IntegerType::get(PT->getContext(), 64);\n"
+      << "  else\n"
+      << "    intType = IntegerType::get(PT->getContext(), 32);\n"
+      << "  byRef = true;\n"
+      << "}\n\n";
+}
+
+
+void emit_beginning(Record *pattern, raw_ostream &os) {
+  auto name = pattern->getValueAsListOfStrings("names")[0];
+  llvm::errs()
+      << "bool handle_" << name
+      << "(BlasInfo blas, llvm::CallInst &call, "
+         "Function *called,\n"
+      << "const std::map<Argument *, bool> &uncacheable_args,\n"
+      << "Type *innerType) {\n"
+      << "CallInst *const newCall = "
+         "cast<CallInst>(gutils->getNewFromOriginal(&call));\n"
+      << "IRBuilder<> BuilderZ(newCall);\n"
+      << "BuilderZ.setFastMathFlags(getFast());\n"
+      << "IRBuilder<> allocationBuilder(gutils->inversionAllocs);\n"
+      << "allocationBuilder.setFastMathFlags(getFast());\n\n"
+      << "auto &DL = gutils->oldFunc->getParent()->getDataLayout();\n\n";
+}
+
+std::vector<size_t> getPossiblyActiveArgs(Record *pattern) {
   std::vector<Record *> inputTypes =
       pattern->getValueAsListOfDefs("inputTypes");
   int numTypes = 0;
   std::vector<size_t> activeArgs;
-  for (auto inputType : inputTypes) {
-    auto val = inputType;
+  for (auto val : inputTypes) {
     if (val->getValueAsBit("active"))
       activeArgs.push_back(numTypes);
     numTypes += val->getValueAsInt("nelem");
   }
 
-  // TODO: assert that blas_modes are comptime (wait is that true?)
-
+  // verify correctness of declarations in td file
+  auto name = pattern->getValue("names")[0];
   DagInit *tree = pattern->getValueAsDag("PatternToMatch");
   int lenDagArgs = tree->getNumArgs();
   llvm::errs() << activeArgs.size() << name;
   assert(numTypes == lenDagArgs);
+  return activeArgs;
+}
+
+// only for testing
+#include "llvm/IR/Type.h"
+
+void emit_ending(Record *pattern, raw_ostream &os) {
+
+  llvm::errs() << "if (gutils->knownRecomputeHeuristic.find(&call) !=\n"
+               << "gutils->knownRecomputeHeuristic.end()) {\n"
+               << "if (!gutils->knownRecomputeHeuristic[&call]) {\n"
+               << "gutils->cacheForReverse(BuilderZ, newCall,\n"
+               << " getIndex(&call, CacheType::Self));\n"
+               << "}\n"
+               << "}\n";
+
+  llvm::errs() << "if (Mode == DerivativeMode::ReverseModeGradient) {\n"
+               << "  eraseIfUnused(*orig, /*erase*/ true, /*check*/ false);\n"
+               << "} else {\n"
+               << "  eraseIfUnused(*orig);\n"
+               << "}\n"
+               << "return true;\n"
+               << "}\n\n";
+}
+
+void emit_vinc_caching(Record *pattern, std::vector<size_t> actArgs,
+                       raw_ostream &os) {}
+
+void emit_caching(Record *pattern, std::vector<size_t> actArgs,
+                  raw_ostream &os) {
+  bool byRef = false; // already emitted by earlier things.
+  // next needs to be emitted later
+  std::vector<bool> toCache(actArgs.size());
+  std::vector<bool> inCache(actArgs.size(), false);
+  SmallVector<Type *, 2> cacheTypes(actArgs.size());
+  bool countcache = false;
+  // if (byRef) {
+  //   // count must be preserved if overwritten
+  //   if (uncacheable_args.find(countarg)->second) {
+  //     cacheTypes.push_back(intType);
+  //     countcache = true;
+  //   }
+  //   // xinc is needed to be preserved if
+  //   // 1) it is potentially overwritten
+  //   //       AND EITHER
+  //   //     a) x is active (for performing the shadow increment) or
+  //   //     b) we're not caching x and need xinc to compute the derivative
+  //   //        of y
+  //   if (uncacheable_args.find(xincarg)->second &&
+  //       (!gutils->isConstantValue(call.getArgOperand(1)) ||
+  //        (!xcache && !gutils->isConstantValue(call.getArgOperand(3))))) {
+  //     cacheTypes.push_back(intType);
+  //     xinccache = true;
+  //   }
+  //   // Similarly for yinc
+  //   if (uncacheable_args.find(yincarg)->second &&
+  //       (!gutils->isConstantValue(call.getArgOperand(3)) ||
+  //        (!ycache && !gutils->isConstantValue(call.getArgOperand(1))))) {
+  //     cacheTypes.push_back(intType);
+  //     yinccache = true;
+  //   }
+  // }
 }
 
 void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
                          const std::vector<Record *> &blas_modes,
                          raw_ostream &os) {
-  genEnumMatcher(blas_modes, os);
+  // emitEnumMatcher(blas_modes, os);
   for (auto pattern : blasPatterns) {
-    checkSingleBlasPattern(pattern);
-    writeEnums(pattern, blas_modes, os);
+    std::vector<size_t> posActArgs = getPossiblyActiveArgs(pattern);
+    emit_beginning(pattern, os);
+    emit_castvals(pattern, posActArgs, os);
+    emit_inttype(pattern, os);
+
+    // new:
+    emit_caching(pattern, posActArgs, os);
+
+    emit_ending(pattern, os);
+    // writeEnums(pattern, blas_modes, os);
   }
-  // llvm::errs() << blas_modes.size() << "\n";
-  // for (auto mode : blas_modes) {
-  //   auto optns = mode->getValueAsListOfStrings("modes");
-  //   for (auto optn : optns)
-  //     llvm::errs() << optn << " ";
-  //   llvm::errs() << "\n";
-  // }
 }
 
 static void emitDerivatives(const RecordKeeper &RK, raw_ostream &os) {
