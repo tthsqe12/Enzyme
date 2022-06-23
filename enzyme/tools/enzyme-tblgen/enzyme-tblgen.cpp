@@ -467,58 +467,6 @@ void emitFullDerivatives(const std::vector<Record *> &patterns,
   }
 }
 
-// void handleSingleBlas(const Record &blasPattern, llvm::CallInst &call,
-//                       Function *called) {
-//   IntegerType *intType =
-//   dyn_cast<IntegerType>(call.getOperand(0)->getType()); bool byRef = false;
-//   if (!intType) {
-//     auto PT = cast<PointerType>(call.getOperand(0)->getType());
-//     if (suffix.contains("64"))
-//       intType = IntegerType::get(PT->getContext(), 64);
-//     else
-//       intType = IntegerType::get(PT->getContext(), 32);
-//     byRef = true;
-//   }
-//
-//   if (byRef) {
-//     // count must be preserved if overwritten
-//     if (uncacheable_args.find(countarg)->second) {
-//       cacheTypes.push_back(intType);
-//       countcache = true;
-//     }
-//   }
-//
-//   // Handle input parameters based on specification
-//   ListInit *argTypes = pattern->getValueAsListInit("inputTypes");
-//   int numTypes = 0;
-//   for (auto argType : llvm::enumerate(*argTypes)) {
-//     size_t argIdx = argType.index();
-//     BLASType *resultType = cast<BLASType>(argType.value());
-//     numTypes += resultType.nelem;
-//   }
-//   // We want to classify each input parameter
-//   assert(numTypes == LLVMCountParams(call));
-// }
-
-// void toCache(size_t argPos, Argument funcArg) {
-//
-//   bool xcache = !gutils->isConstantValue(call.getArgOperand(argPos)) &&
-//                 uncacheable_args.find(funcarg)->second;
-//   if (!xache)
-//     return;
-//   if ((Mode == DerivativeMode::ReverseModeCombined ||
-//        Mode == DerivativeMode::ReverseModePrimal) {
-//   }
-// }
-
-// std::string read_uplo(llvm::CallInst &call, size_t pos) {
-//   std::string s = call.getArgOperand(pos)->getValue();
-//   if (s == "U")
-//     return "U";
-//   if (s == "L")
-//     return "L";
-//   assert(false && "failed reading uplo");
-// }
 
 // Completed :)
 void emitEnumMatcher(const std::vector<Record *> &blas_modes, raw_ostream &os) {
@@ -599,7 +547,7 @@ void emit_inttype(Record *pattern, raw_ostream &os) {
   llvm::errs()
       << "IntegerType *intType = dyn_cast<IntegerType>(call.getOperand("
       << firstIntPos << ")->getType());\n"
-      << "bool byRef = false;\n"
+      << "bool byRef = false;\n" // Fortran Abi?
       << "if (!intType) {\n"
       << "  auto PT = cast<PointerType>(call.getOperand(" << firstIntPos
       << ")->getType());\n"
@@ -676,9 +624,23 @@ void emit_vinc_caching(Record *pattern, std::vector<size_t> actArgs,
 
 void emit_caching(Record *pattern, std::vector<size_t> actArgs,
                   raw_ostream &os) {
-  bool byRef = false; // already emitted by earlier things.
-  // next needs to be emitted later
-  std::vector<bool> toCache(actArgs.size());
+  // 1. No caching for fwd-mode
+  // 2. Deactivate caching for uncacheable_args
+  // 3. Only caching if we do need the primary for an active gradient.
+  llvm::errs()
+      << "std::vector<bool> toCache;\n"
+      << "if (Mode == DerivativeMode::ForwardMode) {\n"
+      << "  toCache = std::vector<bool>(actArgs.size(), false)\n"
+      << "} else {\n"
+      << "  toCache = std::vector<bool>(actArgs.size(), true);\n"
+      << "  auto calledFun = call.getCalledFunction();\n"
+      << "  for (auto argPos : llvm::enumerate(actArgs)) {\n"
+      << "    if "
+         "(!uncacheable_args.find(calledFun->getArg(argPos.value()))->second)\n"
+      << "      toCache[argPos.index()] = false;\n"
+      << "  }\n"
+      << "}\n";
+
   std::vector<bool> inCache(actArgs.size(), false);
   SmallVector<Type *, 2> cacheTypes(actArgs.size());
   bool countcache = false;
@@ -710,10 +672,15 @@ void emit_caching(Record *pattern, std::vector<size_t> actArgs,
   // }
 }
 
+void emitBlasPrimals(const std::vector<Record *> &blasPattern, os) {
+  llvm::errs() << // TODO:
+}
+
 void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
                          const std::vector<Record *> &blas_modes,
                          raw_ostream &os) {
   // emitEnumMatcher(blas_modes, os);
+  emitBlasPrimals(blasPatterns, os);
   for (auto pattern : blasPatterns) {
     std::vector<size_t> posActArgs = getPossiblyActiveArgs(pattern);
     emit_beginning(pattern, os);

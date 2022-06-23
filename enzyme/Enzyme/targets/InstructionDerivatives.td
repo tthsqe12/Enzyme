@@ -65,6 +65,8 @@ class ConstantFP<string val> {
 
 class DiffeRet<string val> {
 }
+class Ret<string val> {
+}
 
 class Shadow<string val> {
 }

@@ -41,150 +41,174 @@ class CallBlasPattern<dag patternToMatch, list<string> funcNames, list<BLASType>
   list<dag> ArgDerivatives = resultOps;
 }
 
+// TODO: let these be generated from CallBlasPattern
+/class BlasInst : Inst<"blas">;
+/def dot  : BlasInst; 
+/def scal : BlasInst;
+/def gemv : BlasInst;
+/def ger  : BlasInst;
+
+class MagicInst : Inst<"blas">;
+def sgn  : MagicInst;
+def zero : MagicInst;
+def todo : MagicInst;
+def trans: MagicInst;
+
 // Lv 1 \wo rotations
 def : CallBlasPattern<(Op $n, $alpha, $x, $incx),
                   ["scal"],
                   [len, fp, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  [(dot $x, DiffeRet<"">), (scal $alpha, DiffeRet<"">)]
                   >;
 
 def : CallBlasPattern<(Op $n, $x, $incx),
                   ["asum"],
                   [len, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  [(scal (sgn $x), DiffeRet<"">)]
                   >;
 
 def : CallBlasPattern<(Op $n, $alpha, $x, $incx, $y, $yinc),
                   ["axpy"],
                   [len, fp, vinc, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  [(dot $x, DiffeRet<"">), (scal $alpha, DiffeRet<"">), (DiffeRet<"">)]
                   >;
 
 def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   ["copy"],
                   [len, vinc, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  [(zero $n, $incy),(todo)]
                   >;
 
 def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   ["swap"],
                   [len, vinc, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   ["dot"],
                   [len, vinc, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  [
+                  (scal $n, DiffeRet<"">, $y, $incy), 
+                  (scal $n, DiffeRet<"">, $x, $incx)
+                  ]
                   >;
 
 def : CallBlasPattern<(Op $n, $x, $incx),
                   ["nrm2"],
                   [len, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  [(FDiv (scal $x, DiffeRet<"">), Ret<"">)]
                   >;
 
 // Lv 2
-def : CallBlasPattern<(Op $layout, $transa, $m, $n, $alpha, $a, $lda, $x, $incx, $beta, $y, $incy),
+
+// y = alpha Ax + beta y
+def : CallBlasPattern<(Op $layout, $transa, $m, $n, $alpha, $A, $lda, $x, $incx, $beta, $y, $incy),
                   ["gemv"],
                   [cblas_layout, trans, len, len, fp, mld, vinc, fp, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  [
+                  /* alpha  */  (dot DiffeRet<"">, (gemv $A, $x)),
+                  /* A      */  (),
+                  /* x      */  (),
+                  /* beta   */  (dot $y, DiffeRet<"">),
+                  /* y      */  (scal $beta, DiffeRet<"">),
+                  ]
                   >;
 
 def : CallBlasPattern<(Op $layout, $m, $n, $alpha, $x, $xinc, $y, $yinc, $v, $ld),
                   ["ger"],
                   [cblas_layout, len, len, fp, vinc, vinc, vld],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $n, $alpha, $v, $ld, $x, $xinc, $beta, $y, $yinc),
                   ["spmv"],
                   [cblas_layout, uplo, len, fp, vld, vinc, fp, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $n, $alpha, $x, $incx, $v, $ld),
                   ["spr"],
                   [cblas_layout, uplo, len, fp, vinc, vld],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $n, $alpha, $x, $incx, $y, $incy, $v, $ld),
                   ["spr2"],
                   [cblas_layout, uplo, len, fp, vinc, vinc, vld],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $transa, $m, $n, $ml, $mu, $alpha, $v, $ld, $x, $xinc, $beta, $y, $yinc),
                   ["gbmv"],
                   [cblas_layout, trans, len, len, bw, bw, fp, vld, vinc, fp, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $n, $k, $alpha, $v, $ld, $x, $xinc, $beta, $y, $yinc),
                   ["sbmv"],
                   [cblas_layout, uplo, len, hbw, fp, vld, vinc, fp, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $transa, $diag, $n, $v, $ld, $x, $incx),
                   ["trmv"],
                   [cblas_layout, uplo, trans, diag, len, vld, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $transa, $diag, $n, $v, $ld, $x, $incx),
                   ["trsv"],
                   [cblas_layout, uplo, trans, diag, len, vld, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $transa, $diag, $n, $k, $v, $ld, $x, $incx),
                   ["tbmv"],
                   [cblas_layout, uplo, trans, diag, len, bw, vld, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $transa, $diag, $n, $k, $v, $ld, $x, $incx),
                   ["tbsv"],
                   [cblas_layout, uplo, trans, diag, len, bw, vld, vinc],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 // Lv 3
 def : CallBlasPattern<(Op $layout, $transa, $transb, $l, $n, $m, $alpha, $a, $lda, $b, $ldb, $beta, $c, $ldc),
                   ["gemm"],
                   [cblas_layout, trans, trans, len, len, len, fp, vld, vld, fp, vld],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $side, $uplo, $m, $n, $alpha, $a, $lda, $b, $ldb, $beta, $c, $ldc),
                   ["symm"],
                   [cblas_layout, side, uplo, len, len, fp, vld, vld, fp, vld],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $side, $uplo, $transa, $diag, $m, $n, $alpha, $a, $lda, $b, $ldb),
                   ["trmm"],
                   [cblas_layout, side, uplo, trans, diag, len, len, fp, vld, vld],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $side, $uplo, $transa, $diag, $m, $n, $alpha, $a, $lda, $b, $ldb),
                   ["trsm"],
                   [cblas_layout, side, uplo, trans, diag, len, len, fp, vld, vld],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $trans, $n, $k, $alpha, $a, $lda, $beta, $c, $ldc),
                   ["syrk"],
                   [cblas_layout, uplo, trans, len, len, fp, vld, fp, vld],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
 def : CallBlasPattern<(Op $layout, $uplo, $trans, $n, $k, $alpha, $a, $lda, $b, $ldb, $beta, $c, $ldc),
                   ["syr2k"],
                   [cblas_layout, uplo, trans, len, len, fp, vld, vld, fp, vld],
-                  [(FDiv (DiffeRet<"">), (FAdd (ConstantFP<"1.0"> $x), $x))]
+                  []
                   >;
 
