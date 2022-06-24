@@ -325,7 +325,7 @@ void emitFullDerivatives(const std::vector<Record *> &patterns,
     os << "  if (";
 
     bool prev = false;
-    for (auto *nameI : *cast<ListInit>(pattern->getValueAsListInit("names"))) {
+    for (auto *nameI : *cast<ListInit>(pattern->getValueAsListInit("name"))) {
       if (prev)
         os << " ||\n      ";
       os << "funcName == " << cast<StringInit>(nameI)->getAsString() << "";
@@ -561,7 +561,7 @@ void emit_inttype(Record *pattern, raw_ostream &os) {
 
 
 void emit_beginning(Record *pattern, raw_ostream &os) {
-  auto name = pattern->getValueAsListOfStrings("names")[0];
+  auto name = pattern->getValueAsListOfStrings("name")[0];
   llvm::errs()
       << "bool handle_" << name
       << "(BlasInfo blas, llvm::CallInst &call, "
@@ -589,7 +589,7 @@ std::vector<size_t> getPossiblyActiveArgs(Record *pattern) {
   }
 
   // verify correctness of declarations in td file
-  auto name = pattern->getValue("names")[0];
+  auto name = pattern->getValue("name")[0];
   DagInit *tree = pattern->getValueAsDag("PatternToMatch");
   int lenDagArgs = tree->getNumArgs();
   llvm::errs() << activeArgs.size() << name;
@@ -624,6 +624,13 @@ void emit_vinc_caching(Record *pattern, std::vector<size_t> actArgs,
 
 void emit_caching(Record *pattern, std::vector<size_t> actArgs,
                   raw_ostream &os) {
+
+  // TODO:
+  // For each active type
+  //    traverse gradient-dag and collect used arg positions
+  //    cache those
+  //    profit
+
   // 1. No caching for fwd-mode
   // 2. Deactivate caching for uncacheable_args
   // 3. Only caching if we do need the primary for an active gradient.
@@ -672,15 +679,42 @@ void emit_caching(Record *pattern, std::vector<size_t> actArgs,
   // }
 }
 
-void emitBlasPrimals(const std::vector<Record *> &blasPattern, os) {
-  llvm::errs() << // TODO:
+void emitBlasPrimals(RecordKeeper &RK, const std::vector<Record *> &blasPattern,
+                     raw_ostream &os) {
+  // get Blas superclass which we will populate afterwards
+  Record *BlasInst = RK.getClass("BlasInst");
+  const auto &foo = RK.getAllDerivedDefinitions("BlasInst");
+  assert(foo.size() == 0); // no user-impl allowed
+
+  // Now create primal defs from all BlasPattern
+  for (auto pattern : blasPattern) {
+    auto name = pattern->getValueAsString("name");
+
+    // Create a Record
+    SMLoc loc{};
+    ArrayRef arr(loc);
+    Record r = Record(name, arr, RK);
+    DagInit *d = pattern->getValueAsDag("PatternToMatch");
+    r.addTemplateArg(d);
+
+    // Mark Record as impl BlasInst to easier find them later
+    r.addSuperClass(BlasInst, SMRange());
+
+    RK.addDef(std::make_unique<Record>(r));
+  }
+  const auto asdf = RK.getDef("dot");
+  assert(asdf->hasDirectSuperClass(BlasInst));
+  const auto &bar = RK.getAllDerivedDefinitions(BlasInst->getName());
+  llvm::errs() << asdf->getName() << " " << bar.size() << ":"
+               << blasPattern.size() << "AAAAAAAAAAAAAAAAA\n";
+  // next fails, interesting
+  assert(bar.size() == blasPattern.size()); // all impl generated
 }
 
 void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
                          const std::vector<Record *> &blas_modes,
                          raw_ostream &os) {
   // emitEnumMatcher(blas_modes, os);
-  emitBlasPrimals(blasPatterns, os);
   for (auto pattern : blasPatterns) {
     std::vector<size_t> posActArgs = getPossiblyActiveArgs(pattern);
     emit_beginning(pattern, os);
@@ -695,7 +729,7 @@ void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
   }
 }
 
-static void emitDerivatives(const RecordKeeper &RK, raw_ostream &os) {
+static void emitDerivatives(RecordKeeper &RK, raw_ostream &os) {
   emitSourceFileHeader("Rewriters", os);
   const auto &patterns = RK.getAllDerivedDefinitions("CallPattern");
   const auto &blasPatterns = RK.getAllDerivedDefinitions("CallBlasPattern");
@@ -704,6 +738,10 @@ static void emitDerivatives(const RecordKeeper &RK, raw_ostream &os) {
 
   // We have full access to the source code to differentiate it
   // emitFullDerivatives(patterns, os);
+
+  // This allows us to also call blas functions which we can use
+  // to differentiate blas functions.
+  emitBlasPrimals(RK, blasPatterns, os);
   // Improve UX / comp-time by handling Blas calls extra.
   emitBlasDerivatives(blasPatterns, blas_modes, os);
 }
