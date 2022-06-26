@@ -529,7 +529,8 @@ void emit_castvals(Record *pattern, std::vector<size_t> activeArgs,
 
 void emit_inttype(Record *pattern, raw_ostream &os) {
   // We only look at the type of the first integer showing up.
-  // That assumes that this is also valid for all other int positions.
+  // This allows to learn if we use Fortran abi (byRef)
+  // or cabi
   size_t firstIntPos = 0;
   bool found = false;
   std::vector<Record *> inputTypes =
@@ -708,7 +709,14 @@ void emitBlasPrimals(RecordKeeper &RK, const std::vector<Record *> &blasPattern,
   llvm::errs() << asdf->getName() << " " << bar.size() << ":"
                << blasPattern.size() << "AAAAAAAAAAAAAAAAA\n";
   // next fails, interesting
+  // next ones doesn't work since RK doesn't update itself here?
   assert(bar.size() == blasPattern.size()); // all impl generated
+}
+
+std::vector<std::vector<size_t>> getToCachePos(pattern, posActArgs) {
+  // TODO: next
+  // Just go trough the ArgDerivatives list and compare
+  // each dag in it with the input dag.
 }
 
 void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
@@ -717,6 +725,12 @@ void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
   // emitEnumMatcher(blas_modes, os);
   for (auto pattern : blasPatterns) {
     std::vector<size_t> posActArgs = getPossiblyActiveArgs(pattern);
+    std::vector<std::vector<size_t>> cacheArgPos =
+        getToCachePos(pattern, posActArgs);
+    // For each active arg we want to have a list of input args required.
+    // We use it to find out if we need to cache them.
+    assert(posActArgs.size() == cacheArgPos.size());
+
     emit_beginning(pattern, os);
     emit_castvals(pattern, posActArgs, os);
     emit_inttype(pattern, os);
