@@ -682,14 +682,21 @@ void emit_caching(Record *pattern, std::vector<size_t> actArgs,
 
 void emitBlasPrimals(RecordKeeper &RK, const std::vector<Record *> &blasPattern,
                      raw_ostream &os) {
+  using llvm::RecTy;
+
   // get Blas superclass which we will populate afterwards
   Record *BlasInst = RK.getClass("BlasInst");
   const auto &foo = RK.getAllDerivedDefinitions("BlasInst");
   assert(foo.size() == 0); // no user-impl allowed
 
+  Record *BlasClass = RK.getClass("BlasNames");
+  std::vector<StringRef> blasNames{};
+
   // Now create primal defs from all BlasPattern
-  for (auto pattern : blasPattern) {
+  for (auto patternEn : llvm::enumerate(blasPattern)) {
+    auto pattern = patternEn.value();
     auto name = pattern->getValueAsString("name");
+    blasNames.push_back(pattern->getValueAsString("name"));
 
     // Create a Record
     SMLoc loc{};
@@ -703,6 +710,10 @@ void emitBlasPrimals(RecordKeeper &RK, const std::vector<Record *> &blasPattern,
 
     RK.addDef(std::make_unique<Record>(r));
   }
+
+  const auto nameRef = ArrayRef(blasNames);
+  // const Init *listInit = ListInit::convertInitListSlice(nameRef);
+  // BlasClass->addValue(rkv);
   const auto asdf = RK.getDef("dot");
   assert(asdf->hasDirectSuperClass(BlasInst));
   const auto &bar = RK.getAllDerivedDefinitions(BlasInst->getName());
@@ -710,14 +721,36 @@ void emitBlasPrimals(RecordKeeper &RK, const std::vector<Record *> &blasPattern,
                << blasPattern.size() << "AAAAAAAAAAAAAAAAA\n";
   // next fails, interesting
   // next ones doesn't work since RK doesn't update itself here?
+  // assert(bar.size() == blasPattern.size()); // all impl generated
+
+  // now we finish the central def
+  RecordVal::FieldKind FK = RecordVal::FieldKind::FK_Normal;
+  RecTy *RT = BlasClass->getValue("names")->getType();
+  // TODO: this looks suspicious, is there a better way to get the init??
+  RecordVal rv = RecordVal(BlasClass->getValueInit("names"), RT, FK);
+  // TODO: this does not add names back after removing:
+  BlasClass->removeValue("names");
+  BlasClass->addValue(rv);
+  const auto names = BlasClass->getValueAsListOfStrings("names");
+  for (auto name : names)
+    llvm::errs() << name;
+  llvm::errs() << " " << blasNames.size() << " " << names.size() << "\n";
   assert(bar.size() == blasPattern.size()); // all impl generated
 }
 
-std::vector<std::vector<size_t>> getToCachePos(pattern, posActArgs) {
-  // TODO: next
-  // Just go trough the ArgDerivatives list and compare
-  // each dag in it with the input dag.
-}
+// std::vector<std::vector<size_t>> getToCachePos(const RecordKeeper &RK,
+// pattern,
+//                                                posActArgs) {
+//   auto name = pattern->getValueAsString("name");
+//   ListInit *argOps = pattern->getValueAsListInit("ArgDerivatives");
+//   for (auto argOpEn : llvm::enumerate(*argOps)) {
+//     size_t argIdx = argOpEn.index();
+//     DagInit *resultTree = cast<DagInit>(argOpEn.value());
+//   }
+//   // TODO: next
+//   // Just go trough the ArgDerivatives list and compare
+//   // each dag in it with the input dag.
+// }
 
 void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
                          const std::vector<Record *> &blas_modes,
@@ -725,11 +758,11 @@ void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
   // emitEnumMatcher(blas_modes, os);
   for (auto pattern : blasPatterns) {
     std::vector<size_t> posActArgs = getPossiblyActiveArgs(pattern);
-    std::vector<std::vector<size_t>> cacheArgPos =
-        getToCachePos(pattern, posActArgs);
-    // For each active arg we want to have a list of input args required.
-    // We use it to find out if we need to cache them.
-    assert(posActArgs.size() == cacheArgPos.size());
+    // std::vector<std::vector<size_t>> cacheArgPos =
+    //     getToCachePos(pattern, posActArgs);
+    //  For each active arg we want to have a list of input args required.
+    //  We use it to find out if we need to cache them.
+    // assert(posActArgs.size() == cacheArgPos.size());
 
     emit_beginning(pattern, os);
     emit_castvals(pattern, posActArgs, os);

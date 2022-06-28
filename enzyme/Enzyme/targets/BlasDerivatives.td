@@ -40,6 +40,7 @@ class BlasNames {
   list<string> types = ["s", "d"]; // float, double, TODO: C, Z
   list<string> prefixes = ["", "cblas_", "cublas_"];
   list<string> suffixes = ["", "_", "_64_"];
+  list<string> names = []; // auto-filled
 }
 
 class CallBlasPattern<dag patternToMatch, string funcName, list<BLASType> paramTypes, 
