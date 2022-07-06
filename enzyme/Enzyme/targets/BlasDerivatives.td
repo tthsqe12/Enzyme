@@ -114,7 +114,7 @@ def dot : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
 
 def nrm2 : CallBlasPattern<(Op $n, $x, $incx),
                   [len, vinc],
-                  [(FDiv (b<"scal"> $x, DiffeRet<"">), Ret<"">)]
+                  [(FDiv (b<"scal"> $n, DiffeRet<"">, $x, $incx), Ret<"">)]
                   >;
 
 // Lv 2

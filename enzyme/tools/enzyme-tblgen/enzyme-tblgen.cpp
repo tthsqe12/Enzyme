@@ -714,19 +714,20 @@ std::vector<std::vector<size_t>> getUsedInputs(Record *pattern) {
   // For each Gradient (say possibly active arg)
   ListInit *gradOps = pattern->getValueAsListInit("ArgDerivatives");
   for (auto argOpEn : llvm::enumerate(*gradOps)) {
-    // TODO: check which dag element is part of the inputs vector (check by
-    // name) and push the posisions of the inputs into a vec
     size_t argIdx = argOpEn.index();
     DagInit *resultRoot = cast<DagInit>(argOpEn.value());
     llvm::SmallSet<size_t, 5> set{};
     findArgPositions(inputs, resultRoot, set);
-    llvm::errs() << "Now printing " << set.size() << " set positions: ";
-    for (auto pos : set) {
-      llvm::errs() << pos << " ";
-    }
-    llvm::errs() << "\n";
+    std::vector<size_t> positionsForGrad{};
 
-    // usedPositions.push_back(set);
+    // llvm::errs() << "Now printing " << set.size() << " set positions: ";
+    for (auto pos : set) {
+      positionsForGrad.push_back(pos);
+      // llvm::errs() << pos << " ";
+    }
+    // llvm::errs() << "\n";
+
+    usedPositions.push_back(positionsForGrad);
   }
   return usedPositions;
 }
@@ -758,35 +759,47 @@ void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
   }
 }
 
+static void checkBlasCallsInDag(const RecordKeeper &RK,
+                                const std::vector<Record *> blasPatterns,
+                                const StringRef blasName,
+                                const DagInit *toSearch) {
+
+  for (size_t i = 0; i < toSearch->getNumArgs(); i++) {
+    if (DagInit *arg = dyn_cast<DagInit>(toSearch->getArg(i))) {
+      checkBlasCallsInDag(RK, blasPatterns, blasName, arg);
+    }
+  }
+
+  auto Def = cast<DefInit>(toSearch->getOperator())->getDef();
+  if (Def->isSubClassOf("b")) {
+    auto numArgs = toSearch->getNumArgs();
+
+    auto opName = Def->getValueAsString("s");
+    auto CalledBlas = RK.getDef(opName);
+    assert(CalledBlas);
+    auto expectedNumArgs =
+        CalledBlas->getValueAsDag("PatternToMatch")->getNumArgs();
+    if (expectedNumArgs != numArgs) {
+      llvm::errs() << "failed calling " << opName << " in the derivative of "
+                   << blasName << " incorrect number of params. Expected "
+                   << expectedNumArgs << " but got " << numArgs << "\n";
+      assert(expectedNumArgs == numArgs);
+    }
+  }
+}
+
 /// Here we check that all the Blas derivatives who call another
 /// blas function will use the correct amount of args
 /// Later we might check for "types" too.
-static void checkBlasCalls(RecordKeeper &RK,
+/// TODO: make work recursively and call from emitBlasDerivatives
+static void checkBlasCalls(const RecordKeeper &RK,
                            std::vector<Record *> blasPatterns) {
   for (auto pattern : blasPatterns) {
     ListInit *argOps = pattern->getValueAsListInit("ArgDerivatives");
     // for each possibly active parameter
-    for (auto argOpEn : llvm::enumerate(*argOps)) {
-      size_t argIdx = argOpEn.index();
-      DagInit *resultRoot = cast<DagInit>(argOpEn.value());
-      // auto opName = resultRoot->getOperator()->getAsString();
-      auto Def = cast<DefInit>(resultRoot->getOperator())->getDef();
-      if (Def->isSubClassOf("b")) {
-        auto numArgs = resultRoot->getNumArgs();
-
-        auto opName = Def->getValueAsString("s");
-        auto CalledBlas = RK.getDef(opName);
-        assert(CalledBlas);
-        auto expectedNumArgs =
-            CalledBlas->getValueAsDag("PatternToMatch")->getNumArgs();
-        if (expectedNumArgs != numArgs) {
-          llvm::errs() << "failed calling " << opName
-                       << " in the derivative of " << pattern->getName()
-                       << " incorrect number of params. Expected "
-                       << expectedNumArgs << " but got " << numArgs << "\n";
-          assert(expectedNumArgs == numArgs);
-        }
-      }
+    for (auto argOp : *argOps) {
+      DagInit *resultRoot = cast<DagInit>(argOp);
+      checkBlasCallsInDag(RK, blasPatterns, pattern->getName(), resultRoot);
     }
   }
 }
