@@ -43,26 +43,13 @@ class BlasNames {
   list<string> names = []; // auto-filled
 }
 
-class CallBlasPattern<dag patternToMatch, string funcName, list<BLASType> paramTypes, 
-                      list<dag> resultOps> : BlasNames {
+class CallBlasPattern<dag patternToMatch, list<BLASType> paramTypes, 
+                      list<dag> resultOps> {
   dag PatternToMatch = patternToMatch;
-  string name = funcName;
   list<BLASType> inputTypes = paramTypes;
   list<dag> ArgDerivatives = resultOps;
 }
 
-// TODO: let these be generated from CallBlasPattern
-//class BlasInst : Inst<"blas">;
-class BlasInst<dag d> : Inst<"blas"> {
-  dag args = d;
-}
-//def dot  : BlasInst; 
-// class TODO: Inst<"blas">;
-// def scal : TODO;
-// def gemv : TODO;
-// def ger  : TODO;
-// 
-// def dot : BlasInst<(Op $a, $b)>;
 
 class MagicInst : Inst<"blas">;
 def sgn  : MagicInst; // only the sign
@@ -76,34 +63,35 @@ class b<string _s> {
   string s = _s;
 }
 
+// TODO:
+// we can improve the next defs by integrating
+// the final value to which we add into the dag, 
+// e.g. if we can use axpy instead of scal.
+
 // Lv 1 \wo rotations
-def : CallBlasPattern<(Op $n, $alpha, $x, $incx),
-                  "scal",
+def scal : CallBlasPattern<(Op $n, $alpha, $x, $incx),
                   [len, fp, vinc],
                   [
-                  (b<"dot"> $x, DiffeRet<"">), 
-                  (b<"scal"> $alpha, DiffeRet<"">)
+                  (b<"dot"> $n, $x, $incx, DiffeRet<"">, $incy), 
+                  (b<"axpy"> $n, $alpha, DiffeRet<"">, $incx, DiffeRet<"">, $incx)
                   ]
                   >;
 
-def : CallBlasPattern<(Op $n, $x, $incx),
-                  "asum",
+def asum : CallBlasPattern<(Op $n, $x, $incx),
                   [len, vinc],
-                  [(b<"scal"> (sgn $x), DiffeRet<"">)]
+                  [(b<"scal"> $n, DiffeRet<"">, (sgn $x), $incx)]
                   >;
 
-def : CallBlasPattern<(Op $n, $alpha, $x, $incx, $y, $yinc),
-                  "axpy",
+def axpy : CallBlasPattern<(Op $n, $alpha, $x, $incx, $y, $yinc),
                   [len, fp, vinc, vinc],
                   [
-                  (b<"dot"> $x, DiffeRet<"">), 
-                  (b<"scal"> $alpha, DiffeRet<"">),
+                  (b<"dot"> $n, $x, $incx, DiffeRet<"">, $incy), 
+                  (b<"scal"> $n, $alpha, DiffeRet<"">, $incy),
                   (DiffeRet<"">)
                   ]
                   >;
 
-def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
-                  "copy",
+def copy : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   [len, vinc, vinc],
                   [
                   (noop),
@@ -111,14 +99,12 @@ def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   ]
                   >;
 
-def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
-                  "swap",
+def swap : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   [len, vinc, vinc],
                   []
                   >;
 
-def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
-                  "dot",
+def dot : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   [len, vinc, vinc],
                   [
                   (b<"scal"> $n, DiffeRet<"">, $y, $incy), 
@@ -126,8 +112,7 @@ def : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   ]
                   >;
 
-def : CallBlasPattern<(Op $n, $x, $incx),
-                  "nrm2",
+def nrm2 : CallBlasPattern<(Op $n, $x, $incx),
                   [len, vinc],
                   [(FDiv (b<"scal"> $x, DiffeRet<"">), Ret<"">)]
                   >;
@@ -135,23 +120,21 @@ def : CallBlasPattern<(Op $n, $x, $incx),
 // Lv 2
 
 // y = alpha Ax + beta y
-def : CallBlasPattern<(Op $layout, $transa, $m, $n, $alpha, $A, $lda, $x, $incx, $beta, $y, $incy),
-                  "gemv",
-                  [cblas_layout, trans, len, len, fp, mld, vinc, fp, vinc],
-                  [
-                  /* alpha  */  (b<"dot"> DiffeRet<"">, (b<"gemv"> $A, $x)),
-                  /* A      */  //(),
-                  /* x      */  //(),
-                  /* beta   */  (b<"dot"> $y, DiffeRet<"">),
-                  /* y      */  (b<"scal"> $beta, DiffeRet<"">),
-                  ]
-                  >;
-
-def : CallBlasPattern<(Op $layout, $m, $n, $alpha, $x, $xinc, $y, $yinc, $v, $ld),
-                  "ger",
-                  [cblas_layout, len, len, fp, vinc, vinc, vld],
-                  []
-                  >;
+// def gemv : CallBlasPattern<(Op $layout, $transa, $m, $n, $alpha, $A, $lda, $x, $incx, $beta, $y, $incy),
+//                   [cblas_layout, trans, len, len, fp, mld, vinc, fp, vinc],
+//                   [
+//                   /* alpha  */  (b<"dot"> DiffeRet<"">, (b<"gemv"> $A, $x)),
+//                   /* A      */  //(),
+//                   /* x      */  //(),
+//                   /* beta   */  (b<"dot"> $y, DiffeRet<"">),
+//                   /* y      */  (b<"scal"> $beta, DiffeRet<"">),
+//                   ]
+//                   >;
+// 
+// def ger : CallBlasPattern<(Op $layout, $m, $n, $alpha, $x, $xinc, $y, $yinc, $v, $ld),
+//                   [cblas_layout, len, len, fp, vinc, vinc, vld],
+//                   []
+//                   >;
 
 // def : CallBlasPattern<(Op $layout, $uplo, $n, $alpha, $v, $ld, $x, $xinc, $beta, $y, $yinc),
 //                   ["spmv"],

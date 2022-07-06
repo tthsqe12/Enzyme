@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -216,11 +217,11 @@ bool handle(raw_ostream &os, Record *pattern, Init *resultTree,
         os << ", ";
       os << "args[" << i << "]";
     }
-    if (opName == "Call" || Def->isSubClassOf("Call"))
+    if (opName == "Call" || Def->isSubClassOf("Call")) {
       os << "})";
-    os << ")";
-    if (opName == "Call" || Def->isSubClassOf("Call"))
       os << ")";
+    }
+    os << ")";
     os << ";\n";
     if (opName == "Call" || Def->isSubClassOf("Call")) {
       os << " cubcall->setDebugLoc(gutils->getNewFromOriginal(orig->"
@@ -562,7 +563,7 @@ void emit_inttype(Record *pattern, raw_ostream &os) {
 
 
 void emit_beginning(Record *pattern, raw_ostream &os) {
-  auto name = pattern->getValueAsListOfStrings("name")[0];
+  auto name = pattern->getName();
   llvm::errs()
       << "bool handle_" << name
       << "(BlasInfo blas, llvm::CallInst &call, "
@@ -590,7 +591,7 @@ std::vector<size_t> getPossiblyActiveArgs(Record *pattern) {
   }
 
   // verify correctness of declarations in td file
-  auto name = pattern->getValue("name")[0];
+  auto name = pattern->getName();
   DagInit *tree = pattern->getValueAsDag("PatternToMatch");
   int lenDagArgs = tree->getNumArgs();
   llvm::errs() << activeArgs.size() << name;
@@ -680,96 +681,113 @@ void emit_caching(Record *pattern, std::vector<size_t> actArgs,
   // }
 }
 
-void emitBlasPrimals(RecordKeeper &RK, const std::vector<Record *> &blasPattern,
-                     raw_ostream &os) {
-  using llvm::RecTy;
+#include <algorithm>
 
-  // get Blas superclass which we will populate afterwards
-  Record *BlasInst = RK.getClass("BlasInst");
-  const auto &foo = RK.getAllDerivedDefinitions("BlasInst");
-  assert(foo.size() == 0); // no user-impl allowed
-
-  Record *BlasClass = RK.getClass("BlasNames");
-  std::vector<StringRef> blasNamesVec{};
-
-  // Now create primal defs from all BlasPattern
-  for (auto pattern : blasPattern) {
-    auto name = pattern->getValueAsString("name");
-    blasNamesVec.push_back(pattern->getValueAsString("name"));
-
-    // Create a Record
-    SMLoc loc{};
-    ArrayRef arr(loc);
-    Record r = Record(name, arr, RK);
-    DagInit *d = pattern->getValueAsDag("PatternToMatch");
-    r.addTemplateArg(d);
-
-    // Mark Record as impl BlasInst to easier find them later
-    r.addSuperClass(BlasInst, SMRange());
-
-    RK.addDef(std::make_unique<Record>(r));
+void findArgPositions(const std::vector<StringRef> toFind,
+                      const DagInit *toSearch,
+                      llvm::SmallSet<size_t, 5> &toInsert) {
+  for (size_t i = 0; i < toSearch->getNumArgs(); i++) {
+    if (DagInit *arg = dyn_cast<DagInit>(toSearch->getArg(i))) {
+      llvm::errs() << " Recursing. Magic!\n";
+      findArgPositions(toFind, arg, toInsert);
+    } else {
+      auto name = toSearch->getArgNameStr(i);
+      for (size_t i = 0; i < toFind.size(); i++) {
+        if (name == toFind[i])
+          toInsert.insert(i);
+      }
+    }
   }
-
-  const auto dotDef = RK.getDef("dot");
-  assert(dotDef->hasDirectSuperClass(BlasInst)); // passes
-  // const auto &bar = RK.getAllDerivedDefinitions(BlasInst->getName());
-  const auto &bar = RK.getAllDerivedDefinitions(BlasInst);
-  llvm::errs() << bar.size() << " "           // 0
-               << blasPattern.size() << "\n"; // 9
-  // next ones doesn't work since RK doesn't update itself here?
-  assert(bar.size() == blasPattern.size()); // all impl generated
-
-  // now we finish the central def
-  const auto nameRef = ArrayRef(blasNamesVec);
-  RecordVal::FieldKind FK = RecordVal::FieldKind::FK_Normal;
-  RecTy *RT = BlasClass->getValue("names")->getType();
-  // TODO: this looks suspicious, is there a way to get a fresh init?
-  RecordVal rv = RecordVal(BlasClass->getValueInit("names"), RT, FK);
-  // TODO: this does not add names back after removing:
-  BlasClass->removeValue("names");
-  BlasClass->addValue(rv);
-  // next one crashes due to not finding names
-  const auto names = BlasClass->getValueAsListOfStrings("names");
-  for (auto name : names)
-    llvm::errs() << name;
-  llvm::errs() << " " << blasNamesVec.size() << " " << names.size() << "\n";
 }
 
-// std::vector<std::vector<size_t>> getToCachePos(const RecordKeeper &RK,
-// pattern,
-//                                                posActArgs) {
-//   auto name = pattern->getValueAsString("name");
-//   ListInit *argOps = pattern->getValueAsListInit("ArgDerivatives");
-//   for (auto argOpEn : llvm::enumerate(*argOps)) {
-//     size_t argIdx = argOpEn.index();
-//     DagInit *resultTree = cast<DagInit>(argOpEn.value());
-//   }
-//   // TODO: next
-//   // Just go trough the ArgDerivatives list and compare
-//   // each dag in it with the input dag.
-// }
+std::vector<std::vector<size_t>> getUsedInputs(Record *pattern) {
+  llvm::errs() << pattern->getName() << " : ";
+  DagInit *argOps = pattern->getValueAsDag("PatternToMatch");
+  std::vector<StringRef> inputs;
+  for (size_t i = 0; i < argOps->getNumArgs(); i++) {
+    inputs.push_back(argOps->getArgNameStr(i));
+    llvm::errs() << argOps->getArgNameStr(i) << " ";
+  }
+  llvm::errs() << "\n";
+
+  std::vector<std::vector<size_t>> usedPositions{};
+  // For each Gradient (say possibly active arg)
+  ListInit *gradOps = pattern->getValueAsListInit("ArgDerivatives");
+  for (auto argOpEn : llvm::enumerate(*gradOps)) {
+    // TODO: check which dag element is part of the inputs vector (check by
+    // name) and push the posisions of the inputs into a vec
+    size_t argIdx = argOpEn.index();
+    DagInit *resultRoot = cast<DagInit>(argOpEn.value());
+    llvm::SmallSet<size_t, 5> set{};
+    findArgPositions(inputs, resultRoot, set);
+    llvm::errs() << "Now printing " << set.size() << " set positions: ";
+    for (auto pos : set) {
+      llvm::errs() << pos << " ";
+    }
+    llvm::errs() << "\n";
+
+    // usedPositions.push_back(set);
+  }
+  return usedPositions;
+}
 
 void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
                          const std::vector<Record *> &blas_modes,
                          raw_ostream &os) {
   // emitEnumMatcher(blas_modes, os);
   for (auto pattern : blasPatterns) {
-    std::vector<size_t> posActArgs = getPossiblyActiveArgs(pattern);
+    // std::vector<size_t> posActArgs = getPossiblyActiveArgs(pattern);
+
+    std::vector<std::vector<size_t>> toCacheArgs = getUsedInputs(pattern);
+
     // std::vector<std::vector<size_t>> cacheArgPos =
     //     getToCachePos(pattern, posActArgs);
     //  For each active arg we want to have a list of input args required.
     //  We use it to find out if we need to cache them.
     // assert(posActArgs.size() == cacheArgPos.size());
 
-    emit_beginning(pattern, os);
-    emit_castvals(pattern, posActArgs, os);
-    emit_inttype(pattern, os);
+    // emit_beginning(pattern, os);
+    // emit_castvals(pattern, posActArgs, os);
+    // emit_inttype(pattern, os);
 
     // new:
-    emit_caching(pattern, posActArgs, os);
+    // emit_caching(pattern, posActArgs, os);
 
-    emit_ending(pattern, os);
+    // emit_ending(pattern, os);
     // writeEnums(pattern, blas_modes, os);
+  }
+}
+
+/// Here we check that all the Blas derivatives who call another
+/// blas function will use the correct amount of args
+/// Later we might check for "types" too.
+static void checkBlasCalls(RecordKeeper &RK,
+                           std::vector<Record *> blasPatterns) {
+  for (auto pattern : blasPatterns) {
+    ListInit *argOps = pattern->getValueAsListInit("ArgDerivatives");
+    // for each possibly active parameter
+    for (auto argOpEn : llvm::enumerate(*argOps)) {
+      size_t argIdx = argOpEn.index();
+      DagInit *resultRoot = cast<DagInit>(argOpEn.value());
+      // auto opName = resultRoot->getOperator()->getAsString();
+      auto Def = cast<DefInit>(resultRoot->getOperator())->getDef();
+      if (Def->isSubClassOf("b")) {
+        auto numArgs = resultRoot->getNumArgs();
+
+        auto opName = Def->getValueAsString("s");
+        auto CalledBlas = RK.getDef(opName);
+        assert(CalledBlas);
+        auto expectedNumArgs =
+            CalledBlas->getValueAsDag("PatternToMatch")->getNumArgs();
+        if (expectedNumArgs != numArgs) {
+          llvm::errs() << "failed calling " << opName
+                       << " in the derivative of " << pattern->getName()
+                       << " incorrect number of params. Expected "
+                       << expectedNumArgs << " but got " << numArgs << "\n";
+          assert(expectedNumArgs == numArgs);
+        }
+      }
+    }
   }
 }
 
@@ -780,12 +798,11 @@ static void emitDerivatives(RecordKeeper &RK, raw_ostream &os) {
   const auto &blas_modes = RK.getAllDerivedDefinitions("blas_modes");
   Record *attrClass = RK.getClass("Attr");
 
+  checkBlasCalls(RK, blasPatterns);
+
   // We have full access to the source code to differentiate it
   // emitFullDerivatives(patterns, os);
 
-  // This allows us to also call blas functions which we can use
-  // to differentiate blas functions.
-  emitBlasPrimals(RK, blasPatterns, os);
   // Improve UX / comp-time by handling Blas calls extra.
   emitBlasDerivatives(blasPatterns, blas_modes, os);
 }
