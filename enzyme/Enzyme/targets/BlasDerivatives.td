@@ -77,10 +77,10 @@ def scal : CallBlasPattern<(Op $n, $alpha, $x, $incx),
                   ]
                   >;
 
-def asum : CallBlasPattern<(Op $n, $x, $incx),
-                  [len, vinc],
-                  [(b<"scal"> $n, DiffeRet<"">, (sgn $x), $incx)]
-                  >;
+// def asum : CallBlasPattern<(Op $n, $x, $incx),
+//                   [len, vinc],
+//                   [(b<"scal"> $n, DiffeRet<"">, (sgn $x), $incx)]
+//                   >;
 
 def axpy : CallBlasPattern<(Op $n, $alpha, $x, $incx, $y, $yinc),
                   [len, fp, vinc, vinc],
@@ -91,18 +91,18 @@ def axpy : CallBlasPattern<(Op $n, $alpha, $x, $incx, $y, $yinc),
                   ]
                   >;
 
-def copy : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
-                  [len, vinc, vinc],
-                  [
-                  (noop),
-                  (todo)
-                  ]
-                  >;
-
-def swap : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
-                  [len, vinc, vinc],
-                  []
-                  >;
+// def copy : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
+//                   [len, vinc, vinc],
+//                   [
+//                   (noop),
+//                   (todo)
+//                   ]
+//                   >;
+// 
+// def swap : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
+//                   [len, vinc, vinc],
+//                   []
+//                   >;
 
 def dot : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   [len, vinc, vinc],
@@ -112,10 +112,10 @@ def dot : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
                   ]
                   >;
 
-def nrm2 : CallBlasPattern<(Op $n, $x, $incx),
-                  [len, vinc],
-                  [(FDiv (b<"scal"> $n, DiffeRet<"">, $x, $incx), Ret<"">)]
-                  >;
+// def nrm2 : CallBlasPattern<(Op $n, $x, $incx),
+//                   [len, vinc],
+//                   [(FDiv (b<"scal"> $n, DiffeRet<"">, $x, $incx), Ret<"">)]
+//                   >;
 
 // Lv 2
 
