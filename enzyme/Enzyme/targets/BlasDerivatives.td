@@ -82,7 +82,7 @@ def scal : CallBlasPattern<(Op $n, $alpha, $x, $incx),
 //                   [(b<"scal"> $n, DiffeRet<"">, (sgn $x), $incx)]
 //                   >;
 
-def axpy : CallBlasPattern<(Op $n, $alpha, $x, $incx, $y, $yinc),
+def axpy : CallBlasPattern<(Op $n, $alpha, $x, $incx, $y, $incy),
                   [len, fp, vinc, vinc],
                   [
                   (b<"dot"> $n, $x, $incx, DiffeRet<"">, $incy), 
@@ -131,12 +131,12 @@ def dot : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
 //                   ]
 //                   >;
 // 
-// def ger : CallBlasPattern<(Op $layout, $m, $n, $alpha, $x, $xinc, $y, $yinc, $v, $ld),
+// def ger : CallBlasPattern<(Op $layout, $m, $n, $alpha, $x, $incx, $y, $incy, $v, $ld),
 //                   [cblas_layout, len, len, fp, vinc, vinc, vld],
 //                   []
 //                   >;
 
-// def : CallBlasPattern<(Op $layout, $uplo, $n, $alpha, $v, $ld, $x, $xinc, $beta, $y, $yinc),
+// def : CallBlasPattern<(Op $layout, $uplo, $n, $alpha, $v, $ld, $x, $incx, $beta, $y, $incy),
 //                   ["spmv"],
 //                   [cblas_layout, uplo, len, fp, vld, vinc, fp, vinc],
 //                   []
@@ -154,13 +154,13 @@ def dot : CallBlasPattern<(Op $n, $x, $incx, $y, $incy),
 //                   []
 //                   >;
 // 
-// def : CallBlasPattern<(Op $layout, $transa, $m, $n, $ml, $mu, $alpha, $v, $ld, $x, $xinc, $beta, $y, $yinc),
+// def : CallBlasPattern<(Op $layout, $transa, $m, $n, $ml, $mu, $alpha, $v, $ld, $x, $incx, $beta, $y, $incy),
 //                   ["gbmv"],
 //                   [cblas_layout, trans, len, len, bw, bw, fp, vld, vinc, fp, vinc],
 //                   []
 //                   >;
 // 
-// def : CallBlasPattern<(Op $layout, $uplo, $n, $k, $alpha, $v, $ld, $x, $xinc, $beta, $y, $yinc),
+// def : CallBlasPattern<(Op $layout, $uplo, $n, $k, $alpha, $v, $ld, $x, $incx, $beta, $y, $incy),
 //                   ["sbmv"],
 //                   [cblas_layout, uplo, len, hbw, fp, vld, vinc, fp, vinc],
 //                   []
