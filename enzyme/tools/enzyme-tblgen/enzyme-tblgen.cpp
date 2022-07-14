@@ -642,40 +642,41 @@ void emit_vinc_caching(Record *pattern, std::vector<size_t> actArgs,
     if (val->getName() == "vinc") {
       auto vecName = argOps->getArgNameStr(argPosition);
       auto vecPosition = argPosition;
+      auto vecUsers = argUsers.lookup(vecPosition);
       auto incName = argOps->getArgNameStr(argPosition + 1);
       auto incPosition = argPosition + 1;
+      auto incUsers = argUsers.lookup(incPosition);
       llvm::errs() << " bool cache_" << vecName
-                   << " = (Mode != DerivativeMode::ForwardMode && uncacheable_" << vecName << ");\n";
+                   << " = Mode != DerivativeMode::ForwardMode &&\n"
+                   << "         uncacheable_" << vecName;
+      for (size_t user: vecUsers) {
+        auto name = argOps->getArgNameStr(user);
+        llvm::errs() << " && active_" << name;
+      }
+      llvm::errs() << ";\n";
       llvm::errs() << " bool cache_" << incName << " = false;\n";
       cacheVars.push_back("cache_" + vecName.str());
-      // TODO: look if at least one of the users of this vec is active and
-      // update bool
-
       // xinc is needed to be preserved if
       // 1) it is potentially overwritten AND EITHER
       //     a) x is active (for performing the shadow increment) or
       //     b) we're not caching x and need xinc to compute the
       //     derivative of a different variable
-      llvm::errs() 
-        << " if (byRef && uncacheable_" << incName << ") {\n"
-        << "   if (active_" << vecName;
-      auto users = argUsers.lookup(incPosition);
-      if (users.size() > 0) {
+      llvm::errs() << " bool need_" << incName << " = (active_" << vecName;
+      if (incUsers.size() > 0) {
         llvm::errs() << " || (!cache_" << vecName << " && (";
         bool first = true;
-        for (size_t user: users) {
+        for (size_t user: incUsers) {
           auto name = argOps->getArgNameStr(user);
           if (!first)
             llvm::errs() << " || ";
           llvm::errs() << "active_" << name;
           first = false;
         }
-        llvm::errs() << "))";
+        llvm::errs() << "));\n";
       }
 
-
-      llvm::errs()
-        << ") {\n"
+      llvm::errs() 
+        << " if (byRef && uncacheable_" << incName << " && need_" << incName << ") {\n"
         << "     cacheTypes.push_back(intType);\n"
         << "     cache_" << incName << " = true;\n "
         << "   }\n"
@@ -818,25 +819,35 @@ void emit_cache_for_reverse(Record *pattern, std::vector<size_t> actArgs,
   }
 
   llvm::errs()
-      << "if (cacheValues.size() == 1)\n"
-      << "          cacheval = cacheValues[0];\n"
-      << "        else {\n"
-      << "          cacheval = UndefValue::get(cachetype);\n"
-      << "          for (auto tup : llvm::enumerate(cacheValues))\n"
-      << "            cacheval = BuilderZ.CreateInsertValue(cacheval, "
+      << "      if (cacheValues.size() == 1) {\n"
+      << "        cacheval = cacheValues[0];\n"
+      << "      } else {\n"
+      << "        cacheval = UndefValue::get(cachetype);\n"
+      << "        for (auto tup : llvm::enumerate(cacheValues))\n"
+      << "          cacheval = BuilderZ.CreateInsertValue(cacheval, "
          "tup.value(), tup.index());\n"
-      << "        }\n"
-      << "        gutils->cacheForReverse(BuilderZ, cacheval,\n"
-      << "                                getIndex(&call, CacheType::Tape));\n";
+      << "      }\n"
+      << "      gutils->cacheForReverse(BuilderZ, cacheval,\n"
+      << "                              getIndex(&call, CacheType::Tape));\n"
+      << " }\n";
 
   llvm::errs()
       << "    unsigned cacheidx = 0;\n"
-      << "      Value *count = gutils->getNewFromOriginal(call.getArgOperand(0));\n"
-      << "      Value *true_xinc = gutils->getNewFromOriginal(arg_xinc);\n"
-      << "      Value *true_yinc = gutils->getNewFromOriginal(arg_yinc);\n"
+      << "    Value *count = gutils->getNewFromOriginal(call.getArgOperand(0));\n"; // todo adjust idx
+ 
+  argPosition = 0;
+  for (auto inputType : inputTypes) {
+    if (inputType->getName() == "vinc") {
+      auto incName = argOps->getArgNameStr(argPosition + 1);
+      llvm::errs() << "    Value *true_" << incName 
+        << " = gutils->getNewFromOriginal(arg_" << incName << ");\n";
+    }
+    argPosition += inputType->getValueAsInt("nelem");
+  }
 
-      << "      IRBuilder<> Builder2(call.getParent());\n"
-      << "      switch (Mode) {\n"
+  llvm::errs()
+      << "    IRBuilder<> Builder2(call.getParent());\n"
+      << "    switch (Mode) {\n"
       << "      case DerivativeMode::ReverseModeCombined:\n"
       << "      case DerivativeMode::ReverseModeGradient:\n"
       << "        getReverseBuilder(Builder2);\n"
@@ -848,7 +859,8 @@ void emit_cache_for_reverse(Record *pattern, std::vector<size_t> actArgs,
       << "        Builder2.setFastMathFlags(BuilderZ.getFastMathFlags());\n"
       << "        break;\n"
       << "      case DerivativeMode::ReverseModePrimal:\n"
-      << "        break;\n";
+      << "        break;\n"
+      << "    }\n\n";
 }
 
 void emit_free(Record *pattern, std::vector<size_t> actArgs,
@@ -891,8 +903,8 @@ void emit_free(Record *pattern, std::vector<size_t> actArgs,
         << "        }\n";
 }
 
-void emit_extract_calls(Record *pattern, std::vector<size_t> actArgs,
-                  raw_ostream &os) {
+void emit_extract_calls(Record *pattern, std::vector<size_t> actArgs, 
+    llvm::DenseMap<size_t, llvm::SmallSet<size_t, 5>> argUsers, raw_ostream &os) {
   size_t argPosition = 0;
   std::vector<Record *> inputTypes =
       pattern->getValueAsListOfDefs("inputTypes");
@@ -931,7 +943,12 @@ void emit_extract_calls(Record *pattern, std::vector<size_t> actArgs,
   for (auto inputType : inputTypes) {
     if (inputType->getName() == "vinc") {
       auto vecName = argOps->getArgNameStr(argPosition);
+      auto vecPosition = argPosition;
+      auto vecUsers = argUsers.lookup(vecPosition);
       auto incName = argOps->getArgNameStr(argPosition + 1);
+      auto incPosition = argPosition + 1;
+      auto incUsers = argUsers.lookup(incPosition);
+
   llvm::errs()
 << "          if (cache_" << incName << ") {\n"
 << "            true_" << incName << " =\n"
@@ -943,8 +960,22 @@ void emit_extract_calls(Record *pattern, std::vector<size_t> actArgs,
 << "            true_" << incName << " = Builder2.CreatePointerCast(\n"
 << "                alloc, call.getArgOperand(0)->getType());\n"
 << "            cacheidx++;\n"
-// Todo: adjust this conditions
-<< "          } else if (cache_" << incName << ") {\n"
+<< "          } else if (active_" << vecName;
+
+  if (incUsers.size() > 0) {
+    bool first = true;
+    llvm::errs() << " || \n            (cache_" << vecName << " && (";
+    for (auto user : incUsers) {
+      auto name = argOps->getArgNameStr(user);
+      if (!first)
+        llvm::errs() << " || ";
+      llvm::errs() << "active_" << name;
+    }
+    llvm::errs() << ")";
+  }
+
+  llvm::errs()
+<< ") {\n"
 << "            if (Mode != DerivativeMode::ForwardModeSplit)\n"
 << "              true_" << incName <<" = lookup(true_" << incName << ", Builder2);\n"
 << "          }\n"
@@ -1102,7 +1133,7 @@ void emit_caching(Record *pattern, std::vector<size_t> actArgs,
       << "  }\n\n";
 
   emit_cache_for_reverse(pattern, actArgs, argUsers, os);
-  emit_free(pattern, actArgs, os);
+
 }
 
 void findArgPositions(const std::vector<StringRef> toFind,
@@ -1213,6 +1244,8 @@ void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
                          raw_ostream &os) {
   // emitEnumMatcher(blas_modes, os);
   for (auto pattern : blasPatterns) {
+    if (pattern->getName() != "dot") 
+      continue;
     // TODO: assert unique input names.
     std::vector<size_t> posActArgs = getPossiblyActiveArgs(pattern);
 
@@ -1232,13 +1265,14 @@ void emitBlasDerivatives(const std::vector<Record *> &blasPatterns,
 
     // new:
     emit_caching(pattern, posActArgs, argUsers, os);
+    emit_extract_calls(pattern, posActArgs, argUsers, os);
 
     // emit_new_vars(pattern, posActArgs, os);
     // emit_blas_call(pattern, posActArgs, os);
 
     // emit_ending(pattern, os);
     // writeEnums(pattern, blas_modes, os);
-    break;
+    emit_free(pattern, posActArgs, os);
   }
 }
 

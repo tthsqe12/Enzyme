@@ -1,10 +1,5 @@
 /*
 * Design:
-* The elements in the BlasName class, together the blas fnc name 
-* should be used to match the actual blas calls in the user src code.
-* For every CallBlasPattern we define a corresponding (undifferentiated) 
-* blas call, using the same parameters as specified in the PatternToMatch.
-* We expect one DAG for each active (see BLASType) parameter.
 */
 
 class BLASType<int _n, bit _active> { 
