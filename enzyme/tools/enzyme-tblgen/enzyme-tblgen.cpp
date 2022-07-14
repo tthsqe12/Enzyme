@@ -677,9 +677,8 @@ void emit_vinc_caching(Record *pattern, std::vector<size_t> actArgs,
 
       llvm::errs() 
         << " if (byRef && uncacheable_" << incName << " && need_" << incName << ") {\n"
-        << "     cacheTypes.push_back(intType);\n"
-        << "     cache_" << incName << " = true;\n "
-        << "   }\n"
+        << "   cacheTypes.push_back(intType);\n"
+        << "   cache_" << incName << " = true;\n "
         << " }\n\n";
 
     }
@@ -942,13 +941,7 @@ void emit_extract_calls(Record *pattern, std::vector<size_t> actArgs,
   argPosition = 0;
   for (auto inputType : inputTypes) {
     if (inputType->getName() == "vinc") {
-      auto vecName = argOps->getArgNameStr(argPosition);
-      auto vecPosition = argPosition;
-      auto vecUsers = argUsers.lookup(vecPosition);
       auto incName = argOps->getArgNameStr(argPosition + 1);
-      auto incPosition = argPosition + 1;
-      auto incUsers = argUsers.lookup(incPosition);
-
   llvm::errs()
 << "          if (cache_" << incName << ") {\n"
 << "            true_" << incName << " =\n"
@@ -960,22 +953,7 @@ void emit_extract_calls(Record *pattern, std::vector<size_t> actArgs,
 << "            true_" << incName << " = Builder2.CreatePointerCast(\n"
 << "                alloc, call.getArgOperand(0)->getType());\n"
 << "            cacheidx++;\n"
-<< "          } else if (active_" << vecName;
-
-  if (incUsers.size() > 0) {
-    bool first = true;
-    llvm::errs() << " || \n            (cache_" << vecName << " && (";
-    for (auto user : incUsers) {
-      auto name = argOps->getArgNameStr(user);
-      if (!first)
-        llvm::errs() << " || ";
-      llvm::errs() << "active_" << name;
-    }
-    llvm::errs() << ")";
-  }
-
-  llvm::errs()
-<< ") {\n"
+<< "          } else if (need_" << incName << ") {\n"
 << "            if (Mode != DerivativeMode::ForwardModeSplit)\n"
 << "              true_" << incName <<" = lookup(true_" << incName << ", Builder2);\n"
 << "          }\n"
@@ -990,20 +968,16 @@ void emit_extract_calls(Record *pattern, std::vector<size_t> actArgs,
   argPosition = 0;
   for (auto inputType : inputTypes) {
     if (inputType->getName() == "vinc") {
-      auto vecName = argOps->getArgNameStr(argPosition);
       auto incName = argOps->getArgNameStr(argPosition + 1);
   llvm::errs()
-
 << "          if (cache_" << incName << ") \n"
 << "            true_" << incName << " = lookup(true_" << incName <<", Builder2);\n"
 << "\n";
     }
     argPosition += inputType->getValueAsInt("nelem");
   }
+  llvm::errs() << "        }\n" << "\n";
 
-  llvm::errs()
-<< "        }\n"
-<< "\n";
   argPosition = 0;
   for (auto inputType : inputTypes) {
     if (inputType->getName() == "vinc") {
@@ -1022,8 +996,10 @@ void emit_extract_calls(Record *pattern, std::vector<size_t> actArgs,
   for (auto inputType : inputTypes) {
     if (inputType->getName() == "vinc") {
       auto vecName = argOps->getArgNameStr(argPosition);
+      auto vecPosition = argPosition;
+      auto vecUsers = argUsers.lookup(vecPosition);
       auto incName = argOps->getArgNameStr(argPosition + 1);
-  llvm::errs() // todo update numbers
+      llvm::errs() // todo update numbers
 << "        if (cache_" << vecName << ") {\n"
 << "          data_ptr_" << vecName << " = data_" << vecName << " =\n"
 << "              (cacheTypes.size() == 1)\n"
@@ -1040,13 +1016,23 @@ void emit_extract_calls(Record *pattern, std::vector<size_t> actArgs,
 << "          if (type_" << vecName << "->isIntegerTy())\n"
 << "            data_" << vecName << " = Builder2.CreatePtrToInt(data_" 
 << vecName << ", type_" << vecName << ");\n"
-<< "        } else if (!gutils->isConstantValue(call.getArgOperand(3))) {\n"
+<< "        }";
+
+      if (vecUsers.size() > 0) {
+        llvm::errs() << " else if (";
+        for (auto user: vecUsers) {
+          auto name = argOps->getArgNameStr(user);
+          llvm::errs() << "active_" << name;
+        }
+        llvm::errs() << ") {\n"
 << "          data_" << vecName << " = lookup(gutils->getNewFromOriginal(arg_" 
 << vecName << "), Builder2);\n"
 << "        }\n";
+      }
     }
     argPosition += inputType->getValueAsInt("nelem");
   }
+
 // << "        if (ycache) {\n"
 // << "          ydata_ptr = ydata =\n"
 // << "              (cacheTypes.size() == 1)\n"
