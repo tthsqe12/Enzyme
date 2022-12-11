@@ -41,6 +41,7 @@
 #include "../Utils.h"
 #include "BaseType.h"
 #include "ConcreteType.h"
+#include "Trie.h"
 
 /// Maximum offset for type trees to keep
 extern "C" {
@@ -64,12 +65,11 @@ static inline std::string to_string(const std::vector<int> x) {
 class TypeTree;
 
 typedef std::shared_ptr<const TypeTree> TypeResult;
-typedef std::map<const std::vector<int>, ConcreteType> ConcreteTypeMapType;
-typedef std::map<const std::vector<int>, const TypeResult> TypeTreeMapType;
+typedef trie<const std::vector<int>, ConcreteType> ConcreteTypeMapType;
 
 /// Class representing the underlying types of values as
 /// sequences of offsets to a ConcreteType
-class TypeTree : public std::enable_shared_from_this<TypeTree> {
+class TypeTree final : public std::enable_shared_from_this<TypeTree> {
 private:
   // mapping of known indices to type if one exists
   ConcreteTypeMapType mapping;
@@ -89,7 +89,7 @@ public:
   /// Lookup the underlying ConcreteType at a given offset sequence
   /// or Unknown if none exists
   ConcreteType operator[](const std::vector<int> Seq) const {
-    auto Found0 = mapping.find(Seq);
+    auto&& Found0 = mapping.find(Seq);
     if (Found0 != mapping.end())
       return Found0->second;
     size_t Len = Seq.size();
@@ -134,7 +134,7 @@ public:
   // is no more information which could be added).
   bool IsFullyDetermined() const {
     std::vector<int> offsets = {-1};
-    while (1) {
+    while (true) {
       auto found = mapping.find(offsets);
       if (found == mapping.end())
         return false;
@@ -166,7 +166,7 @@ public:
     {
       std::vector<int> tmp(Seq);
       while (tmp.size() > 0) {
-        tmp.erase(tmp.end() - 1);
+        tmp.pop_back();
         auto found = mapping.find(tmp);
         if (found != mapping.end()) {
           if (found->second == BaseType::Anything)
@@ -296,7 +296,7 @@ public:
         }
       }
 
-      for (auto vec : toErase) {
+      for (const auto &vec : toErase) {
         mapping.erase(vec);
         changed = true;
       }
@@ -326,23 +326,22 @@ public:
 
   /// Whether this TypeTree contains any information
   bool isKnown() const {
-    for (const auto &pair : mapping) {
+    for (auto&& [seq, type] : mapping) {
       // we should assert here as we shouldn't keep any unknown maps for
       // efficiency
-      assert(pair.second.isKnown());
+      assert(type.isKnown());
     }
     return mapping.size() != 0;
   }
 
   /// Whether this TypeTree knows any non-pointer information
   bool isKnownPastPointer() const {
-    for (auto &pair : mapping) {
+    for (auto&& [seq, type] : mapping) {
       // we should assert here as we shouldn't keep any unknown maps for
       // efficiency
-      assert(pair.second.isKnown());
-      if (pair.first.size() == 0) {
-        assert(pair.second == BaseType::Pointer ||
-               pair.second == BaseType::Anything);
+      assert(type.isKnown());
+      if (seq.size() == 0) {
+        assert(type == BaseType::Pointer || type == BaseType::Anything);
         continue;
       }
       return true;
@@ -353,12 +352,11 @@ public:
   /// Select only the Integer ConcreteTypes
   TypeTree JustInt() const {
     TypeTree vd;
-    for (auto &pair : mapping) {
-      if (pair.second == BaseType::Integer) {
-        vd.insert(pair.first, pair.second);
+    for (auto&& [seq, type] : mapping) {
+      if (type == BaseType::Integer) {
+        vd.insert(seq, type);
       }
     }
-
     return vd;
   }
 
@@ -390,16 +388,15 @@ public:
       }
     }
 
-    for (const auto &pair : mapping) {
-      if (pair.first.size() == EnzymeMaxTypeDepth)
+    for (auto&& [seq, type] : mapping) {
+      if (seq.size() >= EnzymeMaxTypeDepth)
         continue;
       std::vector<int> Vec;
-      Vec.reserve(pair.first.size() + 1);
+      Vec.reserve(seq.size() + 1);
       Vec.push_back(Off);
-      for (auto Val : pair.first)
+      for (auto Val : seq)
         Vec.push_back(Val);
-      Result.mapping.insert(
-          std::pair<const std::vector<int>, ConcreteType>(Vec, pair.second));
+      Result.mapping.insert(std::pair<const std::vector<int>, ConcreteType>(Vec, type));
     }
     return Result;
   }
@@ -408,16 +405,15 @@ public:
   TypeTree Data0() const {
     TypeTree Result;
 
-    for (const auto &pair : mapping) {
-      if (pair.first.size() == 0) {
+    for (auto&& [seq, type] : mapping) {
+      if (seq.size() == 0) {
         llvm::errs() << str() << "\n";
       }
-      assert(pair.first.size() != 0);
+      assert(seq.size() != 0);
 
-      if (pair.first[0] == -1) {
-        std::vector<int> next(pair.first.begin() + 1, pair.first.end());
-        Result.mapping.insert(
-            std::pair<const std::vector<int>, ConcreteType>(next, pair.second));
+      if (seq[0] == -1) {
+        std::vector<int> next(seq.begin() + 1, seq.end());
+        Result.mapping.insert(std::pair<const std::vector<int>, ConcreteType>(next, type));
         for (size_t i = 0, Len = next.size(); i < Len; ++i) {
           if (i == Result.minIndices.size())
             Result.minIndices.push_back(next[i]);
@@ -426,16 +422,15 @@ public:
         }
       }
     }
-    for (const auto &pair : mapping) {
-      if (pair.first[0] == 0) {
-        std::vector<int> next(pair.first.begin() + 1, pair.first.end());
+    for (auto&& [seq, type] : mapping) {
+      if (seq[0] == 0) {
+        std::vector<int> next(seq.begin() + 1, seq.end());
         // We do insertion like this to force an error
         // on the orIn operation if there is an incompatible
         // merge. The insert operation does not error.
-        Result.orIn(next, pair.second);
+        Result.orIn(next, type);
       }
     }
-
     return Result;
   }
 
@@ -455,27 +450,26 @@ public:
     // to force an error if there is an incompatible
     // merge. The insert operation does not error.
 
-    for (const auto &pair : mapping) {
-      assert(pair.first.size() != 0);
+    for (auto&& [seq, type] : mapping) {
+      assert(seq.size() != 0);
 
-      if (pair.first[0] == -1) {
+      if (seq[0] == -1) {
         // For "all index" calculations, explicitly
         // add mappings for regions in range
-        auto next = pair.first;
+        auto next = seq;
         for (size_t i = 0; i < start; ++i) {
           next[0] = i;
-          Result.orIn(next, pair.second);
+          Result.orIn(next, type);
         }
         for (size_t i = end; i < len; ++i) {
           next[0] = i;
-          Result.orIn(next, pair.second);
+          Result.orIn(next, type);
         }
-      } else if ((size_t)pair.first[0] < start ||
-                 ((size_t)pair.first[0] >= end &&
-                  (size_t)pair.first[0] < len)) {
+      } else if ((size_t)seq[0] < start ||
+                 ((size_t)seq[0] >= end &&
+                  (size_t)seq[0] < len)) {
         // Otherwise simply check that the given offset is in range
-
-        Result.insert(pair.first, pair.second);
+        Result.insert(seq, type);
       }
     }
 
@@ -490,37 +484,32 @@ public:
     // Map of indices[1:] => ( End => possible Index[0] )
     std::map<std::vector<int>, std::map<ConcreteType, std::set<int>>> staging;
 
-    for (const auto &pair : mapping) {
-      assert(pair.first.size() != 0);
+    for (auto&& [seq, type] : mapping) {
+      assert(seq.size() != 0);
 
       // Pointer is at offset 0 from this object
-      if (pair.first[0] != 0 && pair.first[0] != -1)
+      if (seq[0] != 0 && seq[0] != -1)
         continue;
 
-      if (pair.first.size() == 1) {
-        assert(pair.second == ConcreteType(BaseType::Pointer) ||
-               pair.second == ConcreteType(BaseType::Anything));
+      if (seq.size() == 1) {
+        assert(type == ConcreteType(BaseType::Pointer) ||
+               type == ConcreteType(BaseType::Anything));
         continue;
       }
 
-      if (pair.first[1] == -1) {
-      } else {
-        if ((size_t)pair.first[1] >= len)
+      if (seq[1] != -1) {
+        if ((size_t)seq[1] >= len)
           continue;
       }
 
-      std::vector<int> next(pair.first.begin() + 2, pair.first.end());
+      std::vector<int> next(seq.begin() + 2, seq.end());
 
-      staging[next][pair.second].insert(pair.first[1]);
+      staging[next][type].insert(seq[1]);
     }
 
     TypeTree Result;
-    for (auto &pair : staging) {
-      auto &pnext = pair.first;
-      for (auto &pair2 : pair.second) {
-        auto dt = pair2.first;
-        const auto &set = pair2.second;
-
+    for (auto&& [pnext, type_map] : staging) {
+      for (auto && [dt, set] : type_map) {
         bool legalCombine = set.count(-1);
 
         // See if we can canonicalize the outermost index into a -1
@@ -579,9 +568,9 @@ public:
   /// canonicalize this, creating -1's where possible
   void CanonicalizeInPlace(size_t len, const llvm::DataLayout &dl) {
     bool canonicalized = true;
-    for (const auto &pair : mapping) {
-      assert(pair.first.size() != 0);
-      if (pair.first[0] != -1) {
+    for (auto&& [seq, type] : mapping) {
+      assert(seq.size() != 0);
+      if (seq[0] != -1) {
         canonicalized = false;
         break;
       }
@@ -593,27 +582,22 @@ public:
     std::map<const std::vector<int>, std::map<ConcreteType, std::set<int>>>
         staging;
 
-    for (const auto &pair : mapping) {
-
-      std::vector<int> next(pair.first.begin() + 1, pair.first.end());
-      if (pair.first[0] != -1) {
-        if ((size_t)pair.first[0] >= len) {
+    for (auto&& [seq, type_map] : mapping) {
+      std::vector<int> next(seq.begin() + 1, seq.end());
+      if (seq[0] != -1) {
+        if ((size_t)seq[0] >= len) {
           llvm::errs() << str() << "\n";
           llvm::errs() << " canonicalizing " << len << "\n";
         }
-        assert((size_t)pair.first[0] < len);
+        assert((size_t)seq[0] < len);
       }
-      staging[next][pair.second].insert(pair.first[0]);
+      staging[next][type_map].insert(seq[0]);
     }
 
     mapping.clear();
 
-    for (auto &pair : staging) {
-      auto &pnext = pair.first;
-      for (auto &pair2 : pair.second) {
-        auto dt = pair2.first;
-        const auto &set = pair2.second;
-
+    for (auto&& [pnext, type_map] : staging) {
+      for (auto&& [dt, set] : type_map) {
         // llvm::errs() << " - set: {";
         // for(auto s : set) llvm::errs() << s << ", ";
         // llvm::errs() << "} len=" << len << "\n";
@@ -673,26 +657,26 @@ public:
   TypeTree KeepMinusOne(bool &legal) const {
     TypeTree dat;
 
-    for (const auto &pair : mapping) {
+    for (auto&& [seq, type] : mapping) {
 
-      assert(pair.first.size() != 0);
+      assert(seq.size() != 0);
 
       // Pointer is at offset 0 from this object
-      if (pair.first[0] != 0 && pair.first[0] != -1)
+      if (seq[0] != 0 && seq[0] != -1)
         continue;
 
-      if (pair.first.size() == 1) {
-        if (pair.second == BaseType::Pointer ||
-            pair.second == BaseType::Anything) {
-          dat.insert(pair.first, pair.second);
+      if (seq.size() == 1) {
+        if (type == BaseType::Pointer ||
+            type == BaseType::Anything) {
+          dat.insert(seq, type);
           continue;
         }
         legal = false;
         break;
       }
 
-      if (pair.first[1] == -1) {
-        dat.insert(pair.first, pair.second);
+      if (seq[1] == -1) {
+        dat.insert(seq, type);
       }
     }
 
@@ -739,11 +723,10 @@ public:
                         const int maxSize, size_t addOffset = 0) const {
     TypeTree Result;
 
-    for (const auto &pair : mapping) {
-      if (pair.first.size() == 0) {
-        if (pair.second == BaseType::Pointer ||
-            pair.second == BaseType::Anything) {
-          Result.insert(pair.first, pair.second);
+    for (auto&& [seq, type] : mapping) {
+      if (seq.size() == 0) {
+        if (type == BaseType::Pointer || type == BaseType::Anything) {
+          Result.insert(seq, type);
           continue;
         }
 
@@ -752,7 +735,7 @@ public:
         llvm_unreachable("ShiftIndices called on a nonpointer/anything");
       }
 
-      std::vector<int> next(pair.first);
+      std::vector<int> next(seq);
 
       if (next[0] == -1) {
         if (maxSize == -1) {
@@ -783,7 +766,7 @@ public:
       }
 
       size_t chunk = 1;
-      auto op = operator[]({pair.first[0]});
+      auto op = operator[]({seq[0]});
       if (auto flt = op.isFloat()) {
         if (flt->isFloatTy()) {
           chunk = 4;
@@ -803,10 +786,10 @@ public:
         auto offincr = (chunk - offset % chunk) % chunk;
         for (int i = offincr; i < maxSize; i += chunk) {
           next[0] = i + addOffset;
-          Result.orIn(next, pair.second);
+          Result.orIn(next, type);
         }
       } else {
-        Result.orIn(next, pair.second);
+        Result.orIn(next, type);
       }
     }
 
@@ -817,15 +800,15 @@ public:
   TypeTree PurgeAnything() const {
     TypeTree Result;
     Result.minIndices.reserve(minIndices.size());
-    for (const auto &pair : mapping) {
-      if (pair.second == ConcreteType(BaseType::Anything))
+    for (auto&& [seq, type] : mapping) {
+      if (type == ConcreteType(BaseType::Anything))
         continue;
-      Result.mapping.insert(pair);
-      for (size_t i = 0, Len = pair.first.size(); i < Len; ++i) {
+      Result.mapping.insert(seq,type);
+      for (size_t i = 0, Len = seq.size(); i < Len; ++i) {
         if (i == Result.minIndices.size())
-          Result.minIndices.push_back(pair.first[i]);
-        else if (pair.first[i] < Result.minIndices[i])
-          Result.minIndices[i] = pair.first[i];
+          Result.minIndices.push_back(seq[i]);
+        else if (seq[i] < Result.minIndices[i])
+          Result.minIndices[i] = seq[i];
       }
     }
     return Result;
@@ -834,23 +817,23 @@ public:
   /// Replace -1 with 0
   TypeTree ReplaceMinus() const {
     TypeTree dat;
-    for (const auto &pair : mapping) {
-      if (pair.second == ConcreteType(BaseType::Anything))
+    for (auto&& [seq, type] : mapping) {
+      if (type == ConcreteType(BaseType::Anything))
         continue;
-      std::vector<int> nex = pair.first;
+      std::vector<int> nex = seq;
       for (auto &v : nex)
         if (v == -1)
           v = 0;
-      dat.insert(nex, pair.second);
+      dat.insert(nex, type);
     }
     return dat;
   }
 
   /// Replace all integer subtypes with anything
   void ReplaceIntWithAnything() {
-    for (auto &pair : mapping) {
-      if (pair.second == BaseType::Integer) {
-        pair.second = BaseType::Anything;
+    for (auto&& [seq, type] : mapping) {
+      if (type == BaseType::Integer) {
+        type = BaseType::Anything;
       }
     }
   }
@@ -858,10 +841,10 @@ public:
   /// Keep only mappings where the type is an `Anything`
   TypeTree JustAnything() const {
     TypeTree dat;
-    for (const auto &pair : mapping) {
-      if (pair.second != ConcreteType(BaseType::Anything))
+    for (auto&& [seq, type] : mapping) {
+      if (type != ConcreteType(BaseType::Anything))
         continue;
-      dat.insert(pair.first, pair.second);
+      dat.insert(seq, type);
     }
     return dat;
   }
@@ -876,7 +859,7 @@ public:
     minIndices = RHS.minIndices;
     mapping.clear();
     for (const auto &elems : RHS.mapping) {
-      mapping.emplace(elems);
+      mapping.insert(elems);
     }
     return true;
   }
@@ -909,11 +892,11 @@ public:
       // if this is a ending -1, remove other elems if no more info
       if (Seq.back() == -1) {
         std::set<std::vector<int>> toremove;
-        for (const auto &pair : mapping) {
-          if (pair.first.size() == Seq.size()) {
+        for (auto&& [key, type] : mapping) {
+          if (key.size() == Seq.size()) {
             bool matches = true;
-            for (unsigned i = 0; i < pair.first.size() - 1; ++i) {
-              if (pair.first[i] != Seq[i]) {
+            for (unsigned i = 0; i < key.size() - 1; ++i) {
+              if (key[i] != Seq[i]) {
                 matches = false;
                 break;
               }
@@ -921,12 +904,12 @@ public:
             if (!matches)
               continue;
 
-            if (CT == BaseType::Anything || CT == pair.second) {
+            if (CT == BaseType::Anything || CT == type) {
               // previous equivalent values or values overwritten by
               // an anything are removed
-              toremove.insert(pair.first);
+              toremove.insert(key);
             } else if (CT != BaseType::Anything &&
-                       pair.second == BaseType::Anything) {
+                       type == BaseType::Anything) {
               // keep lingering anythings if not being overwritten
             } else {
               LegalOr = false;
@@ -942,11 +925,11 @@ public:
       // if this is a starting -1, remove other -1's
       if (Seq[0] == -1) {
         std::set<std::vector<int>> toremove;
-        for (const auto &pair : mapping) {
-          if (pair.first.size() == Seq.size()) {
+        for (auto && [key, type] : mapping) {
+          if (key.size() == Seq.size()) {
             bool matches = true;
-            for (unsigned i = 1; i < pair.first.size(); ++i) {
-              if (pair.first[i] != Seq[i]) {
+            for (unsigned i = 1; i < key.size(); ++i) {
+              if (key[i] != Seq[i]) {
                 matches = false;
                 break;
               }
@@ -954,12 +937,11 @@ public:
             if (!matches)
               continue;
 
-            if (CT == BaseType::Anything || CT == pair.second) {
+            if (CT == BaseType::Anything || CT == type) {
               // previous equivalent values or values overwritten by
               // an anything are removed
-              toremove.insert(pair.first);
-            } else if (CT != BaseType::Anything &&
-                       pair.second == BaseType::Anything) {
+              toremove.insert(key);
+            } else if (CT != BaseType::Anything && type == BaseType::Anything) {
               // keep lingering anythings if not being overwritten
             } else {
               LegalOr = false;
@@ -992,8 +974,8 @@ public:
     // TODO detect recursive merge and simplify
 
     bool changed = false;
-    for (auto &pair : RHS.mapping) {
-      changed |= checkedOrIn(pair.first, pair.second, PointerIntSame, LegalOr);
+    for (auto&& [seq, type] : RHS.mapping) {
+      changed |= checkedOrIn(seq, type, PointerIntSame, LegalOr);
     }
     return changed;
   }
@@ -1043,19 +1025,19 @@ public:
     bool changed = false;
 
     std::vector<std::vector<int>> keystodelete;
-    for (auto &pair : mapping) {
+    for (auto&& [seq, type] : mapping) {
       ConcreteType other = BaseType::Unknown;
-      auto fd = RHS.mapping.find(pair.first);
+      auto fd = RHS.mapping.find(seq);
       if (fd != RHS.mapping.end()) {
         other = fd->second;
       }
-      changed = (pair.second &= other);
-      if (pair.second == BaseType::Unknown) {
-        keystodelete.push_back(pair.first);
+      changed = (type &= other);
+      if (type == BaseType::Unknown) {
+        keystodelete.push_back(seq);
       }
     }
 
-    for (auto &key : keystodelete) {
+    for (const auto &key : keystodelete) {
       mapping.erase(key);
     }
 
@@ -1075,53 +1057,53 @@ public:
 
     std::vector<std::vector<int>> toErase;
 
-    for (auto &pair : mapping) {
+    for (auto&& [key, value] : mapping) {
       // TODO propagate non-first level operands:
       // Special handling is necessary here because a pointer to an int
       // binop with something should not apply the binop rules to the
       // underlying data but instead a different rule
-      if (pair.first.size() > 0) {
-        toErase.push_back(pair.first);
+      if (key.size() > 0) {
+        toErase.push_back(key);
         continue;
       }
 
-      ConcreteType CT(pair.second);
+      ConcreteType CT(value);
       ConcreteType RightCT(BaseType::Unknown);
 
       // Mutual mappings
-      auto found = RHS.mapping.find(pair.first);
+      auto&& found = RHS.mapping.find(key);
       if (found != RHS.mapping.end()) {
         RightCT = found->second;
       }
 
       changed |= CT.binopIn(RightCT, Op);
       if (CT == BaseType::Unknown) {
-        toErase.push_back(pair.first);
+        toErase.push_back(key);
       } else {
-        pair.second = CT;
+        value = CT;
       }
     }
 
     // mapings just on the right
-    for (auto &pair : RHS.mapping) {
+    for (auto&& [key, value] : RHS.mapping) {
       // TODO propagate non-first level operands:
       // Special handling is necessary here because a pointer to an int
       // binop with something should not apply the binop rules to the
       // underlying data but instead a different rule
-      if (pair.first.size() > 0) {
+      if (key.size() > 0) {
         continue;
       }
 
-      if (mapping.find(pair.first) == RHS.mapping.end()) {
+      if (mapping.find(key) == mapping.end()) {
         ConcreteType CT = BaseType::Unknown;
-        changed |= CT.binopIn(pair.second, Op);
+        changed |= CT.binopIn(value, Op);
         if (CT != BaseType::Unknown) {
-          mapping.insert(std::make_pair(pair.first, CT));
+          mapping.insert(std::make_pair(key, CT));
         }
       }
     }
 
-    for (auto vec : toErase) {
+    for (const auto& vec : toErase) {
       mapping.erase(vec);
     }
 
@@ -1132,17 +1114,17 @@ public:
   std::string str() const {
     std::string out = "{";
     bool first = true;
-    for (auto &pair : mapping) {
+    for (auto&& [seq, type] : mapping) {
       if (!first) {
         out += ", ";
       }
       out += "[";
-      for (unsigned i = 0; i < pair.first.size(); ++i) {
+      for (unsigned i = 0; i < seq.size(); ++i) {
         if (i != 0)
           out += ",";
-        out += std::to_string(pair.first[i]);
+        out += std::to_string(seq[i]);
       }
-      out += "]:" + pair.second.str();
+      out += "]:" + type.str();
       first = false;
     }
     out += "}";
