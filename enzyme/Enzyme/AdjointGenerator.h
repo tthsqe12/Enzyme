@@ -8145,9 +8145,7 @@ public:
       return;
     }
 
-
-
-    if (funcName == "MPI_Alltoall") {
+    if (funcName == "MPI_Alltoall" || funcName == "MPI_Alltoallv") {
       if (Mode == DerivativeMode::ReverseModeGradient ||
           Mode == DerivativeMode::ReverseModeCombined ||
           Mode == DerivativeMode::ForwardMode) {
@@ -8161,69 +8159,64 @@ public:
           getReverseBuilder(Builder2);
         }
 
-        Value *orig_sendbuf = call.getOperand(0);
-        Value *orig_sendcount = call.getOperand(1);
-        Value *orig_sendtype = call.getOperand(2);
-        Value *orig_recvbuf = call.getOperand(3);
-        Value *orig_recvcount = call.getOperand(4);
-        Value *orig_recvtype = call.getOperand(5);
-        Value *orig_comm = call.getOperand(6);
+        const auto isAlltoall = funcName == "MPI_Alltoall";
 
-        Value *shadow_recvbuf = gutils->invertPointerM(orig_recvbuf, Builder2);
-        if (!forwardMode)
-          shadow_recvbuf = lookup(shadow_recvbuf, Builder2);
+        int argCount = isAlltoall ? 7 : 9;
+        int recvbufIdx = isAlltoall ? 3 : 4;
+        Value *primal_sendbuf = call.getOperand(0);
+
+        auto [shadow_sendbuf, sendcount, senddispl, sendtype, shadow_recvbuf,
+              recvcount, recvdispl, recvtype, comm] = [&]() {
+          std::array<Value *, 9> shadowArgs;
+          for (int i = 0, j = 0; i < argCount; ++i, ++j) {
+            if (isAlltoall && (i == 2 || i == 5)) {
+              shadowArgs[j] = nullptr;
+              ++j;
+            }
+            if (i == 0 || i == recvbufIdx) {
+              shadowArgs[j] =
+                  gutils->invertPointerM(call.getOperand(i), Builder2);
+            } else {
+              shadowArgs[j] = gutils->getNewFromOriginal(call.getOperand(i));
+            }
+            if (!forwardMode)
+              shadowArgs[j] = lookup(shadowArgs[j], Builder2);
+          }
+          return shadowArgs;
+        }();
 
         if (shadow_recvbuf->getType()->isIntegerTy())
           shadow_recvbuf = Builder2.CreateIntToPtr(
               shadow_recvbuf, Type::getInt8PtrTy(call.getContext()));
 
-        Value *shadow_sendbuf = gutils->invertPointerM(orig_sendbuf, Builder2);
-        if (!forwardMode)
-          shadow_sendbuf = lookup(shadow_sendbuf, Builder2);
-
         if (shadow_sendbuf->getType()->isIntegerTy())
           shadow_sendbuf = Builder2.CreateIntToPtr(
               shadow_sendbuf, Type::getInt8PtrTy(call.getContext()));
 
-        Value *recvcount = gutils->getNewFromOriginal(orig_recvcount);
-        if (!forwardMode)
-          recvcount = lookup(recvcount, Builder2);
-
-        Value *recvtype = gutils->getNewFromOriginal(orig_recvtype);
-        if (!forwardMode)
-          recvtype = lookup(recvtype, Builder2);
-
-        Value *sendcount = gutils->getNewFromOriginal(orig_sendcount);
-        if (!forwardMode)
-          sendcount = lookup(sendcount, Builder2);
-
-        Value *sendtype = gutils->getNewFromOriginal(orig_sendtype);
-        if (!forwardMode)
-          sendtype = lookup(sendtype, Builder2);
-
-        Value *comm = gutils->getNewFromOriginal(orig_comm);
-        if (!forwardMode)
-          comm = lookup(comm, Builder2);
-
-        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2, call.getType());
+        SmallVector<ValueType, 9> argValueTypes(argCount, ValueType::Primal);
+        argValueTypes[0] = ValueType::Shadow;
+        argValueTypes[recvbufIdx] = ValueType::Shadow;
 
         if (forwardMode) {
-          Value *args[] = {
-              /*sendbuf*/ shadow_sendbuf,
-              /*sendcount*/ sendcount,
-              /*sendtype*/ sendtype,
-              /*recvbuf*/ shadow_recvbuf,
-              /*recvcount*/ recvcount,
-              /*recvtype*/ recvtype,
-              /*comm*/ comm,
-          };
 
-          auto Defs = gutils->getInvertedBundles(
-              &call,
-              {ValueType::Shadow, ValueType::Primal, ValueType::Primal,
-               ValueType::Shadow, ValueType::Primal, ValueType::Primal,
-               ValueType::Primal},
-              Builder2, /*lookup*/ false);
+          SmallVector<Value *, 9> args;
+
+          args.push_back(shadow_sendbuf);
+          args.push_back(sendcount);
+          if (!isAlltoall) {
+            args.push_back(senddispl);
+          }
+          args.push_back(sendtype);
+          args.push_back(shadow_recvbuf);
+          args.push_back(recvcount);
+          if (!isAlltoall) {
+            args.push_back(recvdispl);
+          }
+          args.push_back(recvtype);
+          args.push_back(comm);
+
+          auto Defs = gutils->getInvertedBundles(&call, argValueTypes, Builder2,
+                                                 /*lookup*/ false);
 
 #if LLVM_VERSION_MAJOR >= 11
           auto callval = call.getCalledOperand();
@@ -8240,78 +8233,133 @@ public:
           return;
         }
 
+        auto computeBufferByteCount = [this](StringRef funcName, CallInst &call,
+                                             Value *blockCounts,
+                                             Value *blockTypes, Value *comm,
+                                             IRBuilder<> &B) {
+          Value *bufByteCount;
+          auto IntTy = call.getType();
+          auto Int64Ty = Type::getInt64Ty(call.getContext());
+
+          if (funcName == "MPI_Alltoall") {
+            auto typeByteCount = MPI_TYPE_SIZE(blockTypes, B, IntTy);
+            auto n_procs = MPI_COMM_SIZE(comm, B, IntTy);
+
+            bufByteCount = B.CreateZExtOrTrunc(blockCounts, Int64Ty);
+            bufByteCount = B.CreateMul(
+                bufByteCount, B.CreateZExtOrTrunc(typeByteCount, Int64Ty), "",
+                true, true);
+            bufByteCount =
+                B.CreateMul(bufByteCount, B.CreateZExtOrTrunc(n_procs, Int64Ty),
+                            "", true, true);
+
+          } else {
+            BasicBlock *currentBlock = B.GetInsertBlock();
+            BasicBlock *loopBlock = gutils->addReverseBlock(
+                currentBlock, currentBlock->getName() + "_loop",
+                gutils->newFunc);
+            BasicBlock *endBlock = gutils->addReverseBlock(
+                loopBlock, currentBlock->getName() + "_end", gutils->newFunc);
+
+            auto blockTypeByteCount = MPI_TYPE_SIZE(blockTypes, B, IntTy);
+            auto n_procs = MPI_COMM_SIZE(comm, B, IntTy);
+
+            auto bufsizeAlloc = B.CreateAlloca(Int64Ty);
+            B.CreateStore(ConstantInt::get(Int64Ty, 0), bufsizeAlloc);
+
+            B.CreateBr(loopBlock);
+            B.SetInsertPoint(loopBlock);
+
+            auto idx = B.CreatePHI(IntTy, 2);
+            idx->addIncoming(ConstantInt::get(IntTy, 0, false), currentBlock);
+            Value *inc = B.CreateAdd(idx, ConstantInt::get(IntTy, 1, false), "",
+                                     true, true);
+            idx->addIncoming(inc, loopBlock);
+
+            Value *idxs[] = {idx};
+#if LLVM_VERSION_MAJOR > 7
+            Value *blockCount = B.CreateInBoundsGEP(
+                blockCounts->getType()->getPointerElementType(), blockCounts,
+                idxs);
+            blockCount = B.CreateLoad(IntTy, blockCount);
+#else
+            Value *blockCount = B.CreateInBoundsGEP(blockCounts, idxs);
+            blockCount = B.CreateLoad(IntTy, blockCount);
+#endif
+
+#if LLVM_VERSION_MAJOR > 7
+            auto bufsize = B.CreateLoad(Int64Ty, bufsizeAlloc);
+#else
+            auto bufsize = Builder2.CreateLoad(Int64Ty, bufsizeAlloc);
+#endif
+            auto blockByteCount = B.CreateZExtOrTrunc(blockCount, Int64Ty);
+            blockByteCount =
+                B.CreateMul(blockByteCount,
+                            B.CreateZExtOrTrunc(blockTypeByteCount, Int64Ty));
+            B.CreateStore(B.CreateAdd(bufsize, blockByteCount), bufsizeAlloc);
+
+            Value *exitCond = B.CreateICmpEQ(inc, n_procs);
+            B.CreateCondBr(exitCond, endBlock, loopBlock);
+            B.SetInsertPoint(endBlock);
+
+            bufByteCount = B.CreateLoad(Int64Ty, bufsizeAlloc);
+          }
+          return bufByteCount;
+        };
+
         // Get the length for the allocation of the intermediate buffer
-        auto sendlen_arg = Builder2.CreateZExtOrTrunc(
-            sendcount, Type::getInt64Ty(call.getContext()));
-        sendlen_arg =
-            Builder2.CreateMul(sendlen_arg,
-                               Builder2.CreateZExtOrTrunc(
-                                   tysize, Type::getInt64Ty(call.getContext())),
-                               "", true, true);
-        sendlen_arg = Builder2.CreateMul(
-            sendlen_arg,
-            Builder2.CreateZExtOrTrunc(
-                MPI_COMM_SIZE(comm, Builder2, call.getType()),
-                Type::getInt64Ty(call.getContext())),
-            "", true, true);
+        Value *sendbufByteCount = computeBufferByteCount(
+            funcName, call, sendcount, sendtype, comm, Builder2);
 
         // Need to preserve the shadow send/recv buffers.
-        auto BufferDefs = gutils->getInvertedBundles(
-            &call,
-            {ValueType::Shadow, ValueType::Primal, ValueType::Primal,
-             ValueType::Shadow, ValueType::Primal, ValueType::Primal,
-             ValueType::Primal},
-            Builder2, /*lookup*/ true);
+        auto BufferDefs = gutils->getInvertedBundles(&call, argValueTypes,
+                                                     Builder2, /*lookup*/ true);
 
         // 1. Alloc intermediate buffer
         Value *buf =
             CreateAllocation(Builder2, Type::getInt8Ty(call.getContext()),
-                             sendlen_arg, "mpialltoall_malloccache");
+                             sendbufByteCount, "mpialltoall_malloccache");
 
         // 2. alltoall diff(recvbuffer) into intermediate buffer
         {
-          Value *args[] = {
-              /*sendbuf*/ shadow_recvbuf,
-              /*sendcount*/ recvcount,
-              /*sendtype*/ recvtype,
-              /*recvbuf*/ buf,
-              /*recvcount*/ sendcount,
-              /*recvtype*/ sendtype,
-              /*comm*/ comm
-          };
-          Type *types[sizeof(args) / sizeof(*args)];
-          for (size_t i = 0; i < sizeof(args) / sizeof(*args); i++)
-            types[i] = args[i]->getType();
+          SmallVector<Value *, 9> args;
+
+          args.push_back(shadow_recvbuf);
+          args.push_back(recvcount);
+          if (!isAlltoall) {
+            args.push_back(recvdispl);
+          }
+          args.push_back(recvtype);
+          args.push_back(buf);
+          args.push_back(sendcount);
+          if (!isAlltoall) {
+            args.push_back(senddispl);
+          }
+          args.push_back(sendtype);
+          args.push_back(comm);
+
+          SmallVector<Type *, 9> types;
+          for (auto &arg : args) {
+            types.push_back(arg->getType());
+          }
 
           FunctionType *FT = FunctionType::get(call.getType(), types, false);
-          Builder2.CreateCall(called->getParent()->getOrInsertFunction(
-                                  "MPI_Alltoall", FT),
-                              args, BufferDefs);
+          Builder2.CreateCall(
+              called->getParent()->getOrInsertFunction(funcName, FT), args,
+              BufferDefs);
         }
 
         // 3. zero diff(recvbuffer) [memset to 0]
         {
-          auto recvlen_arg = Builder2.CreateZExtOrTrunc(
-              recvcount, Type::getInt64Ty(call.getContext()));
-
-          recvlen_arg = Builder2.CreateMul(
-              recvlen_arg,
-              Builder2.CreateZExtOrTrunc(tysize,
-                                         Type::getInt64Ty(call.getContext())),
-              "", true, true);
-
-          recvlen_arg = Builder2.CreateMul(
-              recvlen_arg,
-              Builder2.CreateZExtOrTrunc(
-                  MPI_COMM_SIZE(comm, Builder2, call.getType()),
-                  Type::getInt64Ty(call.getContext())),
-              "", true, true);
+          Value *recvbufByteCount = computeBufferByteCount(
+              funcName, call, recvcount, recvtype, comm, Builder2);
 
           auto val_arg =
               ConstantInt::get(Type::getInt8Ty(call.getContext()), 0);
 
           auto volatile_arg = ConstantInt::getFalse(call.getContext());
-          Value *args[] = {shadow_recvbuf, val_arg, recvlen_arg, volatile_arg};
+          Value *args[] = {shadow_recvbuf, val_arg, recvbufByteCount,
+                           volatile_arg};
           Type *tys[] = {args[0]->getType(), args[2]->getType()};
 
           auto memset = cast<CallInst>(Builder2.CreateCall(
@@ -8322,8 +8370,8 @@ public:
         }
 
         // 4. diff(sendbuffer) += intermediate buffer (diffmemcopy)
-        DifferentiableMemCopyFloats(call, orig_sendbuf, buf, shadow_sendbuf,
-                                    sendlen_arg, Builder2, BufferDefs);
+        DifferentiableMemCopyFloats(call, primal_sendbuf, buf, shadow_sendbuf,
+                                    sendbufByteCount, Builder2, BufferDefs);
 
         // Free up intermediate buffer
         if (shouldFree()) {
