@@ -8145,7 +8145,8 @@ public:
       return;
     }
 
-    if (funcName == "MPI_Alltoall" || funcName == "MPI_Alltoallv") {
+    if (funcName == "MPI_Alltoall" || funcName == "MPI_Alltoallv" ||
+        funcName == "MPI_Alltoallw") {
       if (Mode == DerivativeMode::ReverseModeGradient ||
           Mode == DerivativeMode::ReverseModeCombined ||
           Mode == DerivativeMode::ForwardMode) {
@@ -8234,77 +8235,88 @@ public:
         }
 
         auto computeBufferByteCount = [this](StringRef funcName, CallInst &call,
-                                             Value *blockCounts,
-                                             Value *blockTypes, Value *comm,
-                                             IRBuilder<> &B) {
-          Value *bufByteCount;
+                                             Value *counts, Value *datatypes,
+                                             Value *comm, IRBuilder<> &B) {
           auto IntTy = call.getType();
           auto Int64Ty = Type::getInt64Ty(call.getContext());
 
           if (funcName == "MPI_Alltoall") {
-            auto typeByteCount = MPI_TYPE_SIZE(blockTypes, B, IntTy);
-            auto n_procs = MPI_COMM_SIZE(comm, B, IntTy);
+            auto n_procs =
+                B.CreateZExtOrTrunc(MPI_COMM_SIZE(comm, B, IntTy), Int64Ty);
+            auto typeByteCount = B.CreateZExtOrTrunc(
+                MPI_TYPE_SIZE(datatypes, B, IntTy), Int64Ty);
 
-            bufByteCount = B.CreateZExtOrTrunc(blockCounts, Int64Ty);
-            bufByteCount = B.CreateMul(
-                bufByteCount, B.CreateZExtOrTrunc(typeByteCount, Int64Ty), "",
-                true, true);
+            Value *bufByteCount = B.CreateZExtOrTrunc(counts, Int64Ty);
+            bufByteCount = B.CreateMul(bufByteCount, n_procs, "", true, true);
             bufByteCount =
-                B.CreateMul(bufByteCount, B.CreateZExtOrTrunc(n_procs, Int64Ty),
-                            "", true, true);
-
+                B.CreateMul(bufByteCount, typeByteCount, "", true, true);
+            return bufByteCount;
           } else {
             BasicBlock *currentBlock = B.GetInsertBlock();
+            auto baseBlockName = currentBlock->getName();
             BasicBlock *loopBlock = gutils->addReverseBlock(
-                currentBlock, currentBlock->getName() + "_loop",
-                gutils->newFunc);
+                currentBlock, baseBlockName + "_loop", gutils->newFunc);
             BasicBlock *endBlock = gutils->addReverseBlock(
-                loopBlock, currentBlock->getName() + "_end", gutils->newFunc);
+                loopBlock, baseBlockName + "_endloop", gutils->newFunc);
 
-            auto blockTypeByteCount = MPI_TYPE_SIZE(blockTypes, B, IntTy);
             auto n_procs = MPI_COMM_SIZE(comm, B, IntTy);
 
-            auto bufsizeAlloc = B.CreateAlloca(Int64Ty);
-            B.CreateStore(ConstantInt::get(Int64Ty, 0), bufsizeAlloc);
+            auto bufByteCountAlloc = B.CreateAlloca(Int64Ty);
+            B.CreateStore(ConstantInt::get(Int64Ty, 0), bufByteCountAlloc);
 
             B.CreateBr(loopBlock);
             B.SetInsertPoint(loopBlock);
 
             auto idx = B.CreatePHI(IntTy, 2);
             idx->addIncoming(ConstantInt::get(IntTy, 0, false), currentBlock);
+
+#if LLVM_VERSION_MAJOR > 7
+            Value *blockCount = B.CreateInBoundsGEP(
+                counts->getType()->getPointerElementType(), counts, {idx});
+#else
+            Value *blockCount = B.CreateInBoundsGEP(blockCounts, {idx});
+#endif
+            blockCount =
+                B.CreateZExtOrTrunc(B.CreateLoad(IntTy, blockCount), Int64Ty);
+
+            Value *bufByteCount = B.CreateLoad(Int64Ty, bufByteCountAlloc);
+            Value *step;
+            if (funcName == "MPI_Alltoallv") {
+              step = B.CreateAdd(bufByteCount, blockCount);
+            } else {
+#if LLVM_VERSION_MAJOR > 7
+              Value *blockType = B.CreateInBoundsGEP(
+                  datatypes->getType()->getPointerElementType(), datatypes,
+                  {idx});
+#else
+              Value *blockType = B.CreateInBoundsGEP(blockTypes, idxs);
+#endif
+              blockType = B.CreateLoad(IntTy, blockType);
+              auto blockTypeByteCount = MPI_TYPE_SIZE(blockType, B, IntTy);
+              auto blockByteCount = B.CreateMul(blockCount, blockTypeByteCount);
+              step = B.CreateAdd(bufByteCount, blockByteCount);
+            }
+            B.CreateStore(step, bufByteCountAlloc);
+
             Value *inc = B.CreateAdd(idx, ConstantInt::get(IntTy, 1, false), "",
                                      true, true);
             idx->addIncoming(inc, loopBlock);
-
-            Value *idxs[] = {idx};
-#if LLVM_VERSION_MAJOR > 7
-            Value *blockCount = B.CreateInBoundsGEP(
-                blockCounts->getType()->getPointerElementType(), blockCounts,
-                idxs);
-            blockCount = B.CreateLoad(IntTy, blockCount);
-#else
-            Value *blockCount = B.CreateInBoundsGEP(blockCounts, idxs);
-            blockCount = B.CreateLoad(IntTy, blockCount);
-#endif
-
-#if LLVM_VERSION_MAJOR > 7
-            auto bufsize = B.CreateLoad(Int64Ty, bufsizeAlloc);
-#else
-            auto bufsize = Builder2.CreateLoad(Int64Ty, bufsizeAlloc);
-#endif
-            auto blockByteCount = B.CreateZExtOrTrunc(blockCount, Int64Ty);
-            blockByteCount =
-                B.CreateMul(blockByteCount,
-                            B.CreateZExtOrTrunc(blockTypeByteCount, Int64Ty));
-            B.CreateStore(B.CreateAdd(bufsize, blockByteCount), bufsizeAlloc);
-
             Value *exitCond = B.CreateICmpEQ(inc, n_procs);
+
             B.CreateCondBr(exitCond, endBlock, loopBlock);
             B.SetInsertPoint(endBlock);
 
-            bufByteCount = B.CreateLoad(Int64Ty, bufsizeAlloc);
+            if (funcName == "MPI_Alltoallv") {
+              auto typeByteCount = MPI_TYPE_SIZE(datatypes, B, Int64Ty);
+              bufByteCount = B.CreateLoad(Int64Ty, bufByteCountAlloc);
+              bufByteCount = B.CreateMul(bufByteCount, typeByteCount);
+              B.CreateStore(bufByteCount, bufByteCountAlloc);
+              bufByteCount = B.CreateLoad(Int64Ty, bufByteCountAlloc);
+            } else {
+              bufByteCount = B.CreateLoad(Int64Ty, bufByteCountAlloc);
+            }
+            return bufByteCount;
           }
-          return bufByteCount;
         };
 
         // Get the length for the allocation of the intermediate buffer

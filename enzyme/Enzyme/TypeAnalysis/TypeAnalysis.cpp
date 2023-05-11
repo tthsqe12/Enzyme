@@ -4234,7 +4234,7 @@ void TypeAnalyzer::visitCallInst(CallInst &call) {
       updateAnalysis(&call, TypeTree(BaseType::Integer).Only(-1, &call), &call);
       return;
     }
-    if (funcName == "MPI_Alltoallv") {
+    if (funcName == "MPI_Alltoallv" || funcName == "MPI_Alltoallw") {
       TypeTree IntPtr;
       IntPtr.insert({-1, -1}, BaseType::Integer);
       IntPtr.insert({-1}, BaseType::Pointer);
