@@ -605,19 +605,13 @@ EnzymeAugmentedReturnPtr EnzymeCreateAugmentedPrimal(
       forceAnonymousTape, width, AtomicAdd));
 }
 
-LLVMValueRef CreateTrace(EnzymeLogicRef Logic, LLVMValueRef totrace,
-                         LLVMValueRef *generative_functions,
-                         size_t generative_functions_size, CProbProgMode mode,
-                         uint8_t autodiff, EnzymeTraceInterfaceRef interface) {
+LLVMValueRef EnzymeCreateTrace(EnzymeLogicRef Logic, LLVMValueRef totrace,
+                               CProbProgMode mode, uint8_t autodiff,
+                               EnzymeTraceInterfaceRef interface) {
 
-  llvm::SmallPtrSet<Function *, 4> GenerativeFunctions;
-  for (uint64_t i = 0; i < generative_functions_size; i++) {
-    GenerativeFunctions.insert(cast<Function>(unwrap(generative_functions[i])));
-  }
-
-  return wrap(eunwrap(Logic).CreateTrace(
-      cast<Function>(unwrap(totrace)), GenerativeFunctions, (ProbProgMode)mode,
-      (bool)autodiff, eunwrap(interface)));
+  return wrap(eunwrap(Logic).CreateTrace(cast<Function>(unwrap(totrace)),
+                                         (ProbProgMode)mode, (bool)autodiff,
+                                         eunwrap(interface)));
 }
 
 LLVMValueRef

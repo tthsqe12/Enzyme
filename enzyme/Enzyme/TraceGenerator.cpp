@@ -305,15 +305,15 @@ void TraceGenerator::handleArbitraryCall(CallInst &call, CallInst *new_call) {
   Function *called = getFunctionFromCall(&call);
   assert(called);
 
-  Function *samplefn = Logic.CreateTrace(called, generativeFunctions, mode,
-                                         autodiff, tutils->interface);
+  Function *samplefn =
+      Logic.CreateTrace(called, mode, autodiff, tutils->interface);
 
   auto trace = tutils->CreateTrace(Builder);
 
   Instruction *tracecall;
   switch (mode) {
   case ProbProgMode::Trace: {
-    SmallVector<Value *, 2> args_and_trace = SmallVector(args);
+    SmallVector<Value *, 2> args_and_trace(args);
     args_and_trace.push_back(trace);
     tracecall =
         Builder.CreateCall(samplefn->getFunctionType(), samplefn,
@@ -378,14 +378,14 @@ void TraceGenerator::handleArbitraryCall(CallInst &call, CallInst *new_call) {
 }
 
 void TraceGenerator::visitCallInst(CallInst &call) {
+  auto fn = getFunctionFromCall(&call);
 
-  if (!generativeFunctions.count(call.getCalledFunction()))
+  if (!generativeFunctions.count(fn))
     return;
 
   CallInst *new_call = dyn_cast<CallInst>(originalToNewFn[&call]);
 
-  if (call.getCalledFunction() ==
-      tutils->getTraceInterface()->getSampleFunction()) {
+  if (fn == tutils->getTraceInterface()->getSampleFunction()) {
     handleSampleCall(call, new_call);
   } else {
     handleArbitraryCall(call, new_call);

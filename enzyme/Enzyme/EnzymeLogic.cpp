@@ -4994,12 +4994,41 @@ llvm::Function *EnzymeLogic::CreateBatch(Function *tobatch, unsigned width,
   return BatchCachedFunctions[tup] = NewF;
 };
 
-llvm::Function *EnzymeLogic::CreateTrace(
-    llvm::Function *totrace, SmallPtrSetImpl<Function *> &GenerativeFunctions,
-    ProbProgMode mode, bool autodiff, TraceInterface *interface) {
-  TraceCacheKey tup = std::make_tuple(totrace, mode);
+llvm::Function *EnzymeLogic::CreateTrace(llvm::Function *totrace,
+                                         ProbProgMode mode, bool autodiff,
+                                         TraceInterface *interface) {
+  TraceCacheKey tup(totrace, mode, autodiff, interface);
   if (TraceCachedFunctions.find(tup) != TraceCachedFunctions.end()) {
     return TraceCachedFunctions.find(tup)->second;
+  }
+
+  // Determine generative functions
+  SmallPtrSet<Function *, 4> GenerativeFunctions;
+  SetVector<Function *, std::deque<Function *>> workList;
+  workList.insert(interface->getSampleFunction());
+  GenerativeFunctions.insert(interface->getSampleFunction());
+
+  while (!workList.empty()) {
+    auto todo = *workList.begin();
+    workList.erase(workList.begin());
+
+    for (auto &&U : todo->uses()) {
+#if LLVM_VERSION_MAJOR > 10
+      if (auto &&call = dyn_cast<CallBase>(U.getUser())) {
+        auto &&fun = call->getParent()->getParent();
+        auto &&[it, inserted] = GenerativeFunctions.insert(fun);
+        if (inserted)
+          workList.insert(fun);
+      }
+#else
+      if (auto &&call = dyn_cast<CallInst>(U.getUser())) {
+        auto &&fun = call->getParent()->getParent();
+        auto &&[it, inserted] = GenerativeFunctions.insert(fun);
+        if (inserted)
+          workList.insert(fun);
+      }
+#endif
+    }
   }
 
   ValueToValueMapTy originalToNewFn;
