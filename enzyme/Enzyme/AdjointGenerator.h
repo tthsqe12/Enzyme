@@ -7352,6 +7352,534 @@ public:
     // 4. diff(sendbuffer) += intermediate buffer (diffmemcopy)
     // 5. free intermediate buffer
 
+    if (funcName == "MPI_Allreduce") {
+      if (Mode == DerivativeMode::ReverseModeGradient ||
+          Mode == DerivativeMode::ReverseModeCombined ||
+          Mode == DerivativeMode::ForwardMode) {
+
+        bool forwardMode = Mode == DerivativeMode::ForwardMode;
+
+        IRBuilder<> Builder2 =
+            forwardMode ? IRBuilder<>(&call) : IRBuilder<>(call.getParent());
+        if (forwardMode) {
+          getForwardBuilder(Builder2);
+        } else {
+          getReverseBuilder(Builder2);
+        }
+
+        // Get the operations from MPI_Receive
+        Value *orig_sendbuf = call.getOperand(0);
+        Value *orig_recvbuf = call.getOperand(1);
+        Value *orig_count = call.getOperand(2);
+        Value *orig_datatype = call.getOperand(3);
+        Value *orig_op = call.getOperand(4);
+        Value *orig_comm = call.getOperand(5);
+
+        bool isComparisonOp = false;
+        bool opContainsLocation = false;
+        if (Constant *C = dyn_cast<Constant>(orig_op)) {
+          while (ConstantExpr *CE = dyn_cast<ConstantExpr>(C)) {
+            C = CE->getOperand(0);
+          }
+          if (auto GV = dyn_cast<GlobalVariable>(C)) {
+            if (GV->getName() == "ompi_mpi_op_min" ||
+                GV->getName() == "ompi_mpi_op_max") {
+              isComparisonOp = true;
+            } else if (GV->getName() == "ompi_mpi_op_minloc" ||
+                       GV->getName() == "ompi_mpi_op_maxloc") {
+              isComparisonOp = true;
+              opContainsLocation = true;
+            }
+          }
+          // MPICH
+          if (ConstantInt *CI = dyn_cast<ConstantInt>(C)) {
+            assert(false && "Unhandled MPI Op");
+            //            if (CI->getValue() == 1476395011) {
+            //              isComparisonOp = true;
+            //            }
+          }
+        }
+        if (!isComparisonOp) {
+          std::string s;
+          llvm::raw_string_ostream ss(s);
+          ss << *gutils->oldFunc << "\n";
+          ss << *gutils->newFunc << "\n";
+          ss << " call: " << call << "\n";
+          ss << " unhandled mpi_allreduce op: " << *orig_op << "\n";
+          if (CustomErrorHandler) {
+            CustomErrorHandler(ss.str().c_str(), wrap(&call),
+                               ErrorType::NoDerivative, nullptr);
+          }
+          llvm::errs() << ss.str() << "\n";
+          report_fatal_error("unhandled mpi_allreduce op");
+        }
+
+        Value *sendbuf = gutils->getNewFromOriginal(orig_sendbuf);
+        Value *recvbuf = gutils->getNewFromOriginal(orig_recvbuf);
+        if (!forwardMode)
+          sendbuf = lookup(sendbuf, Builder2);
+
+        Value *shadow_recvbuf = gutils->invertPointerM(orig_recvbuf, Builder2);
+        if (!forwardMode)
+          shadow_recvbuf = lookup(shadow_recvbuf, Builder2);
+        if (shadow_recvbuf->getType()->isIntegerTy())
+          shadow_recvbuf = Builder2.CreateIntToPtr(
+              shadow_recvbuf, Type::getInt8PtrTy(call.getContext()));
+
+        Value *shadow_sendbuf = gutils->invertPointerM(orig_sendbuf, Builder2);
+        if (!forwardMode)
+          shadow_sendbuf = lookup(shadow_sendbuf, Builder2);
+        if (shadow_sendbuf->getType()->isIntegerTy())
+          shadow_sendbuf = Builder2.CreateIntToPtr(
+              shadow_sendbuf, Type::getInt8PtrTy(call.getContext()));
+
+        // Need to preserve the shadow send/recv buffers.
+        auto BufferDefs = gutils->getInvertedBundles(
+            &call,
+            {ValueType::Shadow, ValueType::Shadow, ValueType::Primal,
+             ValueType::Primal, ValueType::Primal, ValueType::Primal},
+            Builder2, /*lookup*/ !forwardMode);
+
+        Value *count = gutils->getNewFromOriginal(orig_count);
+        if (!forwardMode)
+          count = lookup(count, Builder2);
+
+        Value *datatype = gutils->getNewFromOriginal(orig_datatype);
+        if (!forwardMode)
+          datatype = lookup(datatype, Builder2);
+
+        Value *comm = gutils->getNewFromOriginal(orig_comm);
+        if (!forwardMode)
+          comm = lookup(comm, Builder2);
+
+        Value *op = gutils->getNewFromOriginal(orig_op);
+        if (!forwardMode)
+          op = lookup(op, Builder2);
+
+        if (forwardMode) {
+          Value *args[] = {
+              /*sendbuf*/ shadow_sendbuf,
+              /*recvbuf*/ shadow_recvbuf,
+              /*count*/ count,
+              /*datatype*/ datatype,
+              /*op*/ op,
+              /*comm*/ comm,
+          };
+
+#if LLVM_VERSION_MAJOR >= 11
+          auto callval = call.getCalledOperand();
+#else
+          auto callval = call.getCalledValue();
+#endif
+
+#if LLVM_VERSION_MAJOR > 7
+          Builder2.CreateCall(call.getFunctionType(), callval, args,
+                              BufferDefs);
+#else
+          Builder2.CreateCall(callval, args, BufferDefs);
+#endif
+
+          return;
+        }
+
+        if (!opContainsLocation) {
+          // We need to first find the location info for selected values
+          // Copy the primal data into structs containing indices
+          // Perform allreduce with comparison + loc op
+
+          // Get the equivalent MPI type+int datatype
+
+          Type *IntTy = call.getCalledFunction()->getArg(2)->getType();
+          Type *MPIDatatypePtrTy =
+              call.getCalledFunction()->getArg(3)->getType();
+          Type *MPIOpPtrTy = call.getCalledFunction()->getArg(4)->getType();
+
+          Value *newDatatype = nullptr;
+          StructType *FPIntTy = nullptr;
+          if (Constant *C = dyn_cast<Constant>(orig_datatype)) {
+            while (ConstantExpr *CE = dyn_cast<ConstantExpr>(C)) {
+              C = CE->getOperand(0);
+            }
+            if (auto GV = dyn_cast<GlobalVariable>(C)) {
+              std::string newDatatypeName;
+              if (GV->getName() == "ompi_mpi_double") {
+                newDatatypeName = "ompi_mpi_double_int";
+                FPIntTy = StructType::get(
+                    GV->getContext(),
+                    {Type::getDoubleTy(GV->getContext()), IntTy});
+              } else if (GV->getName() == "ompi_mpi_float") {
+                newDatatypeName = "ompi_mpi_float_int";
+                FPIntTy = StructType::get(
+                    GV->getContext(),
+                    {Type::getFloatTy(GV->getContext()), IntTy});
+              } else {
+                assert(false && "Unhandle MPI Datatype");
+              }
+              auto mod = call.getParent()->getParent()->getParent();
+              newDatatype = mod->getNamedGlobal(newDatatypeName);
+              if (!newDatatype) {
+                newDatatype =
+                    mod->getOrInsertGlobal(newDatatypeName, GV->getValueType());
+                cast<GlobalVariable>(newDatatype)
+                    ->setAttributes(GV->getAttributes());
+                cast<GlobalVariable>(newDatatype)->setAlignment(GV->getAlign());
+              }
+            }
+            // MPICH
+            if (ConstantInt *CI = dyn_cast<ConstantInt>(C)) {
+              assert(false && "Unhandled MPI Datatype");
+            }
+          }
+
+          // Get the MPI comparison op that passes location information
+          Value *compLocOp = nullptr;
+          if (Constant *C = dyn_cast<Constant>(orig_op)) {
+            while (ConstantExpr *CE = dyn_cast<ConstantExpr>(C)) {
+              C = CE->getOperand(0);
+            }
+            if (auto GV = dyn_cast<GlobalVariable>(C)) {
+              std::string newOpName = (GV->getName() == "ompi_mpi_op_min")
+                                          ? "ompi_mpi_op_minloc"
+                                          : "ompi_mpi_op_maxloc";
+              auto mod = call.getParent()->getParent()->getParent();
+              compLocOp = mod->getNamedGlobal(newOpName);
+              if (!compLocOp) {
+                compLocOp =
+                    mod->getOrInsertGlobal(newOpName, GV->getValueType());
+                cast<GlobalVariable>(compLocOp)->setAttributes(
+                    GV->getAttributes());
+                cast<GlobalVariable>(compLocOp)->setAlignment(GV->getAlign());
+              }
+            }
+            // MPICH
+            if (ConstantInt *CI = dyn_cast<ConstantInt>(C)) {
+              assert(false && "Unhandled MPI Op");
+            }
+          }
+
+          FunctionType *MPIUserfunctionTy =
+              FunctionType::get(Type::getVoidTy(call.getContext()),
+                                {Type::getInt8PtrTy(call.getContext()),
+                                 Type::getInt8PtrTy(call.getContext()),
+                                 PointerType::getUnqual(IntTy),
+                                 PointerType::getUnqual(MPIDatatypePtrTy)},
+                                false);
+
+          Function *sumLocFn =
+              [](Module &M, StructType *FPIntTy,
+                 FunctionType *MPIUserfunctionTy) -> Function * {
+            std::string name;
+            if (FPIntTy->getElementType(0)->isFloatTy()) {
+              name = "__enzyme_mpi_sumloc_float";
+            } else if (FPIntTy->getElementType(0)->isDoubleTy()) {
+              name = "__enzyme_mpi_sumloc_double";
+            } else {
+              assert(false && "Unhandled MPI Datatype");
+            }
+
+#if LLVM_VERSION_MAJOR >= 9
+            Function *F = cast<Function>(
+                M.getOrInsertFunction(name, MPIUserfunctionTy).getCallee());
+#else
+            Function *F =
+                cast<Function>(M.getOrInsertFunction(name, MPIUserfunctionTy));
+#endif
+
+            if (!F->empty())
+              return F;
+
+            F->setLinkage(Function::LinkageTypes::InternalLinkage);
+            F->addFnAttr(Attribute::ArgMemOnly);
+            F->addFnAttr(Attribute::NoUnwind);
+            F->addFnAttr(Attribute::AlwaysInline);
+            F->addParamAttr(0, Attribute::NoCapture);
+            F->addParamAttr(1, Attribute::NoCapture);
+            F->addParamAttr(2, Attribute::NoCapture);
+            F->addParamAttr(3, Attribute::NoCapture);
+
+            auto FPIntPtrTy = PointerType::getUnqual(FPIntTy);
+            auto FPTy = FPIntTy->getElementType(0);
+            auto IntTy = FPIntTy->getElementType(1);
+            auto IntZero = ConstantInt::get(IntTy, 0);
+            auto IntOne = ConstantInt::get(IntTy, 1);
+
+            BasicBlock *entry = BasicBlock::Create(M.getContext(), "entry", F);
+            BasicBlock *loop = BasicBlock::Create(M.getContext(), "loop", F);
+            BasicBlock *end = BasicBlock::Create(M.getContext(), "end", F);
+
+            IRBuilder<> EntryBuilder(entry);
+            IRBuilder<> LoopBuilder(loop);
+            IRBuilder<> EndBuilder(end);
+
+            auto inputPtr =
+                EntryBuilder.CreateBitCast(F->getArg(0), FPIntPtrTy);
+            auto outputPtr =
+                EntryBuilder.CreateBitCast(F->getArg(1), FPIntPtrTy);
+            auto N = EntryBuilder.CreateLoad(IntTy, F->getArg(2));
+
+            auto entryCond = EntryBuilder.CreateICmpSGT(N, IntZero);
+            EntryBuilder.CreateCondBr(entryCond, loop, end);
+
+            auto idx = LoopBuilder.CreatePHI(N->getType(), 2);
+            auto inc = LoopBuilder.CreateAdd(idx, IntOne, "", true, true);
+            idx->addIncoming(IntZero, entry);
+            idx->addIncoming(inc, loop);
+            auto loopCond = LoopBuilder.CreateICmpSLT(inc, N);
+
+            auto inputPtrFP = LoopBuilder.CreateInBoundsGEP(FPIntTy, inputPtr,
+                                                            {idx, IntZero});
+            auto inputFetchFP = LoopBuilder.CreateLoad(FPTy, inputPtrFP);
+            auto outputPtrFP = LoopBuilder.CreateInBoundsGEP(FPIntTy, outputPtr,
+                                                             {idx, IntZero});
+            auto outputFetchFP = LoopBuilder.CreateLoad(FPTy, outputPtrFP);
+            LoopBuilder.CreateStore(
+                LoopBuilder.CreateFAdd(inputFetchFP, outputFetchFP),
+                outputPtrFP);
+
+            auto inputPtrInt =
+                LoopBuilder.CreateInBoundsGEP(FPIntTy, inputPtr, {idx, IntOne});
+            auto inputFetchInt = LoopBuilder.CreateLoad(IntTy, inputPtrInt);
+            auto outputPtrInt = LoopBuilder.CreateInBoundsGEP(
+                FPIntTy, outputPtr, {idx, IntOne});
+            LoopBuilder.CreateStore(inputFetchInt, outputPtrInt);
+
+            LoopBuilder.CreateCondBr(loopCond, loop, end);
+
+            EndBuilder.CreateRetVoid();
+
+            return F;
+          }(*call.getModule(), FPIntTy, MPIUserfunctionTy);
+
+          auto commute = ConstantInt::get(IntTy, 1);
+
+          auto sumLocOp = MPI_OP_CREATE(sumLocFn, commute, Builder2, MPIOpPtrTy);
+          auto rank = MPI_COMM_RANK(comm, Builder2, IntTy);
+          auto tysize = MPI_TYPE_SIZE(newDatatype, Builder2, IntTy);
+
+          // Get the length for the allocation of the intermediate buffer
+          auto len_arg = Builder2.CreateZExtOrTrunc(
+              count, Type::getInt64Ty(call.getContext()));
+          len_arg = Builder2.CreateMul(
+              len_arg,
+              Builder2.CreateZExtOrTrunc(tysize,
+                                         Type::getInt64Ty(call.getContext())),
+              "", true, true);
+
+          auto sendbuf_tmp = CreateAllocation(Builder2, FPIntTy, len_arg);
+          auto recvbuf_tmp = CreateAllocation(Builder2, FPIntTy, len_arg);
+
+          auto baseBlockName = Builder2.GetInsertBlock()->getName();
+          auto CreateForLoop =
+              [this, &baseBlockName](
+                  Value *begin, Value *end,
+                  std::function<void(Value *, IRBuilder<> &)> CreateLoopBody,
+                  IRBuilder<> &B) {
+                BasicBlock *currentBlock = B.GetInsertBlock();
+                auto baseName = currentBlock->getName();
+                BasicBlock *loopBlock = gutils->addReverseBlock(
+                    currentBlock, baseBlockName + "_loop", gutils->newFunc);
+                BasicBlock *endBlock = gutils->addReverseBlock(
+                    loopBlock, baseBlockName, gutils->newFunc);
+
+                auto entryCond = B.CreateICmpSGT(end, begin);
+                B.CreateCondBr(entryCond, loopBlock, endBlock);
+
+                B.SetInsertPoint(loopBlock);
+
+                auto idx = B.CreatePHI(begin->getType(), 2);
+                idx->addIncoming(begin, currentBlock);
+
+                CreateLoopBody(idx, B);
+
+                auto inc =
+                    B.CreateAdd(idx, ConstantInt::get(begin->getType(), 1));
+                idx->addIncoming(inc, loopBlock);
+
+                auto loopCond = B.CreateICmpSLT(idx, end);
+                B.CreateCondBr(loopCond, loopBlock, endBlock);
+
+                B.SetInsertPoint(endBlock);
+              };
+
+          auto CopySendBufToSendBufTmp = [&](Value *idx, IRBuilder<> &B) {
+            auto sendbuf_tmp_FP =
+                B.CreateInBoundsGEP(FPIntTy, sendbuf_tmp,
+                                    {idx, ConstantInt::get(idx->getType(), 0)});
+            auto sendbuf_FP = B.CreateInBoundsGEP(
+                FPIntTy->getElementType(0),
+                B.CreateBitCast(sendbuf, PointerType::getUnqual(
+                                             FPIntTy->getElementType(0))),
+                {idx});
+            B.CreateStore(B.CreateLoad(FPIntTy->getElementType(0), sendbuf_FP),
+                          sendbuf_tmp_FP);
+
+            auto sendbuf_tmp_Int =
+                B.CreateInBoundsGEP(FPIntTy, sendbuf_tmp,
+                                    {idx, ConstantInt::get(idx->getType(), 1)});
+            B.CreateStore(rank, sendbuf_tmp_Int);
+          };
+          CreateForLoop(ConstantInt::get(IntTy, 0), count,
+                        CopySendBufToSendBufTmp, Builder2);
+
+          {
+            Value *args[] = {
+                /*sendbuf*/ Builder2.CreateBitCast(
+                    sendbuf_tmp, Type::getInt8PtrTy(call.getContext())),
+                /*recvbuf*/
+                Builder2.CreateBitCast(recvbuf_tmp,
+                                       Type::getInt8PtrTy(call.getContext())),
+                /*count*/ count,
+                /*datatype*/
+                Builder2.CreateBitCast(newDatatype, MPIDatatypePtrTy),
+                /*op*/ Builder2.CreateBitCast(compLocOp, MPIOpPtrTy),
+                /*comm*/ comm,
+            };
+
+            Type *types[sizeof(args) / sizeof(*args)];
+            for (size_t i = 0; i < sizeof(args) / sizeof(*args); i++) {
+              types[i] = args[i]->getType();
+            }
+
+            FunctionType *FT =
+                FunctionType::get(count->getType(), types, false);
+            Builder2.CreateCall(
+                called->getParent()->getOrInsertFunction("MPI_Allreduce", FT),
+                args, BufferDefs);
+          }
+
+          auto CopyShadowRecvBufToRecvBufTmp = [&](Value *idx, IRBuilder<> &B) {
+            auto recvbuf_tmp_FP =
+                B.CreateInBoundsGEP(FPIntTy, recvbuf_tmp,
+                                    {idx, ConstantInt::get(idx->getType(), 0)});
+            auto shadow_recvbuf_FP = B.CreateInBoundsGEP(
+                FPIntTy->getElementType(0),
+                B.CreateBitCast(
+                    shadow_recvbuf,
+                    PointerType::getUnqual(FPIntTy->getElementType(0))),
+                {idx});
+            B.CreateStore(
+                B.CreateLoad(FPIntTy->getElementType(0), shadow_recvbuf_FP),
+                recvbuf_tmp_FP);
+            // B.CreateStore(Builder2.CreateFAdd(B.CreateLoad(FPIntTy->getElementType(0),
+            // shadow_recvbuf_FP), B.CreateLoad(FPIntTy->getElementType(0),
+            // recvbuf_tmp_FP)), recvbuf_tmp_FP);
+          };
+          CreateForLoop(ConstantInt::get(IntTy, 0), count,
+                        CopyShadowRecvBufToRecvBufTmp, Builder2);
+
+          {
+            Value *args[] = {
+                /*sendbuf*/ Builder2.CreateBitCast(
+                    recvbuf_tmp, Type::getInt8PtrTy(call.getContext())),
+                /*recvbuf*/
+                Builder2.CreateBitCast(sendbuf_tmp,
+                                       Type::getInt8PtrTy(call.getContext())),
+                /*count*/ count,
+                /*datatype*/
+                Builder2.CreateBitCast(newDatatype, MPIDatatypePtrTy),
+                /*op*/ sumLocOp,
+                /*comm*/ comm,
+            };
+
+            Type *types[sizeof(args) / sizeof(*args)];
+            for (size_t i = 0; i < sizeof(args) / sizeof(*args); i++) {
+              types[i] = args[i]->getType();
+            }
+
+            FunctionType *FT =
+                FunctionType::get(count->getType(), types, false);
+            Builder2.CreateCall(
+                called->getParent()->getOrInsertFunction("MPI_Allreduce", FT),
+                args, BufferDefs);
+          }
+
+          // CopySendBufTmpToShadowSendBuf
+          {
+            auto begin = ConstantInt::get(IntTy, 0);
+            auto end = count;
+            IRBuilder<> &B = Builder2;
+
+            BasicBlock *currentBlock = B.GetInsertBlock();
+            BasicBlock *loopBlock = gutils->addReverseBlock(
+                currentBlock, baseBlockName + "_loop", gutils->newFunc);
+            BasicBlock *thenBlock = gutils->addReverseBlock(
+                loopBlock, baseBlockName + "_then", gutils->newFunc);
+            BasicBlock *endThenBlock = gutils->addReverseBlock(
+                thenBlock, baseBlockName + "_endthen", gutils->newFunc);
+            BasicBlock *endLoopBlock = gutils->addReverseBlock(
+                endThenBlock, baseBlockName, gutils->newFunc);
+
+            auto entryCond = B.CreateICmpSGT(end, begin);
+            B.CreateCondBr(entryCond, loopBlock, endLoopBlock);
+
+            B.SetInsertPoint(loopBlock);
+
+            auto idx = B.CreatePHI(begin->getType(), 2);
+            idx->addIncoming(begin, currentBlock);
+
+            {
+              auto sendbuf_tmp_Int = B.CreateInBoundsGEP(
+                  FPIntTy, sendbuf_tmp,
+                  {idx, ConstantInt::get(idx->getType(), 1)});
+              auto loc =
+                  B.CreateLoad(FPIntTy->getElementType(1), sendbuf_tmp_Int);
+              auto ifCond = B.CreateICmpEQ(loc, rank);
+              B.CreateCondBr(ifCond, thenBlock, endThenBlock);
+
+              B.SetInsertPoint(thenBlock);
+
+              auto sendbuf_tmp_FP = B.CreateInBoundsGEP(
+                  FPIntTy, sendbuf_tmp,
+                  {idx, ConstantInt::get(idx->getType(), 0)});
+              auto shadow_sendbuf_FP = B.CreateInBoundsGEP(
+                  FPIntTy->getElementType(0),
+                  B.CreateBitCast(
+                      shadow_sendbuf,
+                      PointerType::getUnqual(FPIntTy->getElementType(0))),
+                  {idx});
+              auto res = B.CreateFAdd(
+                  B.CreateLoad(FPIntTy->getElementType(0), sendbuf_tmp_FP),
+                  B.CreateLoad(FPIntTy->getElementType(0), shadow_sendbuf_FP));
+              B.CreateStore(res, shadow_sendbuf_FP);
+
+              B.CreateBr(endThenBlock);
+
+              B.SetInsertPoint(endThenBlock);
+            }
+
+            auto inc = B.CreateAdd(idx, ConstantInt::get(begin->getType(), 1));
+            idx->addIncoming(inc, endThenBlock);
+
+            auto loopCond = B.CreateICmpSLT(idx, end);
+            B.CreateCondBr(loopCond, loopBlock, endLoopBlock);
+
+            B.SetInsertPoint(endLoopBlock);
+          }
+
+          // 3. Zero diff(recvbuffer) [memset to 0]
+          auto val_arg =
+              ConstantInt::get(Type::getInt8Ty(call.getContext()), 0);
+          auto volatile_arg = ConstantInt::getFalse(call.getContext());
+          Value *args[] = {shadow_recvbuf, val_arg, len_arg, volatile_arg};
+          Type *tys[] = {args[0]->getType(), args[2]->getType()};
+          auto memset = cast<CallInst>(Builder2.CreateCall(
+              Intrinsic::getDeclaration(gutils->newFunc->getParent(),
+                                        Intrinsic::memset, tys),
+              args, BufferDefs));
+          memset->addParamAttr(0, Attribute::NonNull);
+
+          // Free up intermediate buffer
+          if (shouldFree()) {
+            CreateDealloc(Builder2, sendbuf_tmp);
+            CreateDealloc(Builder2, recvbuf_tmp);
+          }
+        }
+      }
+      if (Mode == DerivativeMode::ReverseModeGradient)
+        eraseIfUnused(call, /*erase*/ true, /*check*/ false);
+      return;
+    }
+
     // int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count,
     //              MPI_Datatype datatype, MPI_Op op, MPI_Comm comm)
 
