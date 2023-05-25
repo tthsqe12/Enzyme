@@ -147,6 +147,60 @@ public:
     }
   }
 
+  llvm::Value *MPI_OP_CREATE(llvm::Value *function, llvm::Value *commute,
+                             llvm::IRBuilder<> &B, llvm::Type *MPIOpPtrTy) {
+    using namespace llvm;
+
+    auto MPIUserfunctionPtrTy = function->getType();
+    auto IntTy = commute->getType();
+
+    auto MPIOpcreateTy = FunctionType::get(
+        IntTy,
+        {MPIUserfunctionPtrTy, IntTy, PointerType::getUnqual(MPIOpPtrTy)},
+        false);
+    auto &context = commute->getContext();
+    auto op = IRBuilder<>(gutils->inversionAllocs).CreateAlloca(MPIOpPtrTy);
+    AttributeList AL;
+    AL = AL.addParamAttribute(context, 0, Attribute::AttrKind::NonNull);
+    AL = AL.addParamAttribute(context, 0, Attribute::AttrKind::NoUndef);
+    AL = AL.addParamAttribute(context, 1, Attribute::AttrKind::NoUndef);
+    AL = AL.addParamAttribute(context, 2, Attribute::AttrKind::NonNull);
+    AL = AL.addParamAttribute(context, 2, Attribute::AttrKind::NoUndef);
+#if LLVM_VERSION_MAJOR >= 14
+    AL = AL.addAttributeAtIndex(context, AttributeList::FunctionIndex,
+                                Attribute::AttrKind::NoUnwind);
+#else
+    AL = AL.addAttribute(context, AttributeList::FunctionIndex,
+                         Attribute::AttrKind::NoUnwind);
+#endif
+#if LLVM_VERSION_MAJOR >= 14
+    AL = AL.addAttributeAtIndex(context, AttributeList::FunctionIndex,
+                                Attribute::AttrKind::NoFree);
+    AL = AL.addAttributeAtIndex(context, AttributeList::FunctionIndex,
+                                Attribute::AttrKind::NoSync);
+    AL = AL.addAttributeAtIndex(context, AttributeList::FunctionIndex,
+                                Attribute::AttrKind::WillReturn);
+#elif LLVM_VERSION_MAJOR >= 9
+    AL = AL.addAttribute(context, AttributeList::FunctionIndex,
+                         Attribute::AttrKind::NoFree);
+    AL = AL.addAttribute(context, AttributeList::FunctionIndex,
+                         Attribute::AttrKind::NoSync);
+    AL = AL.addAttribute(context, AttributeList::FunctionIndex,
+                         Attribute::AttrKind::WillReturn);
+#endif
+
+    llvm::Value *args[] = {function, commute, op};
+    B.CreateCall(
+        B.GetInsertBlock()->getParent()->getParent()->getOrInsertFunction(
+            "MPI_Op_create", MPIOpcreateTy, {}),
+        args);
+#if LLVM_VERSION_MAJOR > 7
+    return B.CreateLoad(MPIOpPtrTy, op);
+#else
+    return B.CreateLoad(op);
+#endif
+  }
+
   llvm::Value *MPI_TYPE_SIZE(llvm::Value *DT, llvm::IRBuilder<> &B,
                              llvm::Type *intType) {
     using namespace llvm;
