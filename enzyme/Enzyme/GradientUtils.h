@@ -34,6 +34,16 @@
 
 #include <llvm/Config/llvm-config.h>
 
+#if LLVM_VERSION_MAJOR >= 16
+#define private public
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
+#undef private
+#else
+#include "SCEV/ScalarEvolution.h"
+#include "SCEV/ScalarEvolutionExpander.h"
+#endif
+
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -159,8 +169,8 @@ public:
   llvm::SmallPtrSet<llvm::Instruction *, 4> TapesToPreventRecomputation;
 
   llvm::ValueMap<llvm::PHINode *, llvm::WeakTrackingVH> fictiousPHIs;
-  llvm::ValueToValueMapTy originalToNewFn;
-  llvm::ValueToValueMapTy newToOriginalFn;
+  llvm::ValueMap<const llvm::Value *, AssertingReplacingVH> originalToNewFn;
+  llvm::ValueMap<const llvm::Value *, AssertingReplacingVH> newToOriginalFn;
   llvm::SmallVector<llvm::CallInst *, 4> originalCalls;
 
   llvm::SmallPtrSet<llvm::Instruction *, 4> unnecessaryIntermediates;
@@ -362,8 +372,9 @@ public:
                 const llvm::SmallPtrSetImpl<llvm::Value *> &activevals_,
                 DIFFE_TYPE ReturnActivity,
                 llvm::ArrayRef<DIFFE_TYPE> ArgDiffeTypes_,
-                llvm::ValueToValueMapTy &originalToNewFn_, DerivativeMode mode,
-                unsigned width, bool omp);
+                llvm::ValueMap<const llvm::Value *, AssertingReplacingVH>
+                    &originalToNewFn_,
+                DerivativeMode mode, unsigned width, bool omp);
 
 public:
   DIFFE_TYPE getDiffeType(llvm::Value *v, bool foreignFunction) const;

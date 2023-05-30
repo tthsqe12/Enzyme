@@ -29,8 +29,6 @@
 #include "GradientUtils.h"
 #include "LibraryFuncs.h"
 
-#include "llvm/ADT/Triple.h"
-
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -104,8 +102,9 @@
 #include "llvm/Transforms/Utils/Local.h"
 
 #include "llvm/IR/LegacyPassManager.h"
+#if LLVM_VERSION_MAJOR <= 16
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
-
+#endif
 #include "llvm/Analysis/ScalarEvolutionAliasAnalysis.h"
 
 #include "CacheUtility.h"
@@ -2106,7 +2105,8 @@ Function *PreProcessCache::CloneFunctionWithReturns(
     ValueToValueMapTy &ptrInputs, ArrayRef<DIFFE_TYPE> constant_args,
     SmallPtrSetImpl<Value *> &constants, SmallPtrSetImpl<Value *> &nonconstant,
     SmallPtrSetImpl<Value *> &returnvals, ReturnType returnValue,
-    DIFFE_TYPE returnType, Twine name, ValueToValueMapTy *VMapO,
+    DIFFE_TYPE returnType, Twine name,
+    llvm::ValueMap<const llvm::Value *, AssertingReplacingVH> *VMapO,
     bool diffeReturnArg, llvm::Type *additionalArg) {
   assert(!F->empty());
   F = preprocessForClone(F, mode);
@@ -2170,7 +2170,9 @@ Function *PreProcessCache::CloneFunctionWithReturns(
 #endif
   CloneOrigin[NewF] = F;
   if (VMapO) {
-    VMapO->insert(VMap.begin(), VMap.end());
+    for (const auto &data : VMap)
+      VMapO->insert(std::pair<const llvm::Value *, AssertingReplacingVH>(
+          data.first, (llvm::Value *)data.second));
     VMapO->getMDMap() = VMap.getMDMap();
   }
 
@@ -2192,6 +2194,11 @@ F->getParamAttribute(ii, Attribute::StructRet).getValueAsType())); #else
       NewF->addParamAttr(
           jj, F->getAttributes().getParamAttr(ii, "enzymejl_returnRoots"));
     }
+    for (auto ty : PrimalParamAttrsToPreserve)
+      if (F->getAttributes().hasParamAttr(ii, ty)) {
+        auto attr = F->getAttributes().getParamAttr(ii, ty);
+        NewF->addParamAttr(jj, attr);
+      }
     if (constant_args[ii] == DIFFE_TYPE::CONSTANT) {
       if (!i->hasByValAttr())
         constants.insert(i);
@@ -2205,7 +2212,10 @@ F->getParamAttribute(ii, Attribute::StructRet).getValueAsType())); #else
                      << " nonconstant arg " << *j << "\n";
     }
 
-    if (constant_args[ii] == DIFFE_TYPE::DUP_NONEED) {
+    // Always remove nonnull/noundef since the caller may choose to pass undef
+    // as an arg if provably it will not be used in the reverse pass
+    if (constant_args[ii] == DIFFE_TYPE::DUP_NONEED ||
+        mode == DerivativeMode::ReverseModeGradient) {
       if (F->hasParamAttribute(ii, Attribute::NonNull)) {
         NewF->removeParamAttr(jj, Attribute::NonNull);
       }
@@ -2221,9 +2231,12 @@ F->getParamAttribute(ii, Attribute::StructRet).getValueAsType())); #else
       hasPtrInput = true;
       ptrInputs[i] = (j + 1);
       // TODO: find a way to keep the attributes in vector mode.
-      if (F->hasParamAttribute(ii, Attribute::NoCapture) && width == 1) {
-        NewF->addParamAttr(jj + 1, Attribute::NoCapture);
-      }
+      if (width == 1)
+        for (auto ty : ShadowParamAttrsToPreserve)
+          if (F->getAttributes().hasParamAttr(ii, ty)) {
+            auto attr = F->getAttributes().getParamAttr(ii, ty);
+            NewF->addParamAttr(jj + 1, attr);
+          }
       // TODO: find a way to keep sret for shadow
       if (F->hasParamAttribute(ii, Attribute::StructRet)) {
         if (width == 1) {

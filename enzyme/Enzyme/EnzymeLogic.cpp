@@ -30,8 +30,15 @@
 #include "ActivityAnalysis.h"
 #include "AdjointGenerator.h"
 
+#if LLVM_VERSION_MAJOR >= 16
+#define private public
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
+#undef private
+#else
 #include "SCEV/ScalarEvolution.h"
 #include "SCEV/ScalarEvolutionExpander.h"
+#endif
 
 #include "llvm/Analysis/DependenceAnalysis.h"
 #include <deque>
@@ -56,8 +63,6 @@
 #include "llvm/Analysis/GlobalsModRef.h"
 
 #include "llvm/Support/AMDGPUMetadata.h"
-
-#include "llvm/ADT/Triple.h"
 
 #include "DiffeGradientUtils.h"
 #include "FunctionUtils.h"
@@ -1494,9 +1499,11 @@ bool legalCombinedForwardReverse(
       return;
     }
     // Do not try moving an instruction that modifies memory, if we already
-    // moved it
+    // moved it. We need the originalToNew check because we may have deleted
+    // the instruction, which wont require the failed to move.
     if (!isa<StoreInst>(I) || unnecessaryInstructions.count(I) == 0)
       if (I->mayReadOrWriteMemory() &&
+          gutils->originalToNewFn.find(I) != gutils->originalToNewFn.end() &&
           gutils->getNewFromOriginal(I)->getParent() !=
               gutils->getNewFromOriginal(I->getParent())) {
         legal = false;
@@ -1995,9 +2002,8 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
                   "Massaging provided custom augmented forward pass to handle "
                   "constant argumented");
       SmallVector<Type *, 3> dupargs;
-      SmallVector<DIFFE_TYPE, 4> next_constant_args =
-          SmallVector<DIFFE_TYPE, 4>(constant_args.begin(),
-                                     constant_args.end());
+      std::vector<DIFFE_TYPE> next_constant_args(constant_args.begin(),
+                                                 constant_args.end());
       {
         auto OFT = todiff->getFunctionType();
         for (size_t act_idx = 0; act_idx < constant_args.size(); act_idx++) {
@@ -2072,7 +2078,7 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
                  AugmentedCachedFunctions, tup,
                  AugmentedReturn(NewF, aug.tapeType, aug.tapeIndices,
                                  aug.returns, aug.overwritten_args_map,
-                                 aug.can_modref_map))
+                                 aug.can_modref_map, next_constant_args))
           ->second;
     }
 
@@ -2140,7 +2146,7 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
       return insert_or_assign<AugmentedCacheKey, AugmentedReturn>(
                  AugmentedCachedFunctions, tup,
                  AugmentedReturn(foundcalled, nullptr, {}, returnMapping, {},
-                                 {}))
+                                 {}, constant_args))
           ->second;
     }
 
@@ -2202,7 +2208,7 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
         return insert_or_assign<AugmentedCacheKey, AugmentedReturn>(
                    AugmentedCachedFunctions, tup,
                    AugmentedReturn(foundcalled, nullptr, {}, returnMapping, {},
-                                   {}))
+                                   {}, constant_args))
             ->second;
       }
       if (ST->getNumElements() == 2 &&
@@ -2213,7 +2219,7 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
         return insert_or_assign<AugmentedCacheKey, AugmentedReturn>(
                    AugmentedCachedFunctions, tup,
                    AugmentedReturn(foundcalled, nullptr, {}, returnMapping, {},
-                                   {}))
+                                   {}, constant_args))
             ->second;
       }
       if (ST->getNumElements() == 2) {
@@ -2271,7 +2277,7 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
         return insert_or_assign<AugmentedCacheKey, AugmentedReturn>(
                    AugmentedCachedFunctions, tup,
                    AugmentedReturn(foundcalled, nullptr, {}, returnMapping, {},
-                                   {}))
+                                   {}, constant_args))
             ->second;
       }
     }
@@ -2282,7 +2288,8 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
 
     return insert_or_assign<AugmentedCacheKey, AugmentedReturn>(
                AugmentedCachedFunctions, tup,
-               AugmentedReturn(foundcalled, nullptr, {}, returnMapping, {}, {}))
+               AugmentedReturn(foundcalled, nullptr, {}, returnMapping, {}, {},
+                               constant_args))
         ->second; // dyn_cast<StructType>(st->getElementType(0)));
   }
 
@@ -2349,7 +2356,8 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
 
   insert_or_assign(AugmentedCachedFunctions, tup,
                    AugmentedReturn(gutils->newFunc, nullptr, {}, returnMapping,
-                                   overwritten_args_map, can_modref_map));
+                                   overwritten_args_map, can_modref_map,
+                                   constant_args));
 
   auto getIndex = [&](Instruction *I, CacheType u) -> unsigned {
     return gutils->getIndex(
@@ -2938,7 +2946,10 @@ const AugmentedReturn &EnzymeLogic::CreateAugmentedPrimal(
         ei->replaceAllUsesWith(rep);
         ei->eraseFromParent();
       }
-      user->eraseFromParent();
+      if (user->getParent()->getParent() == gutils->newFunc)
+        gutils->erase(user);
+      else
+        user->eraseFromParent();
     } else {
       user->setCalledFunction(NewF);
     }
@@ -3907,6 +3918,18 @@ Function *EnzymeLogic::CreatePrimalAndGradient(
                 "return or non-constant");
   }
 
+  if (augmenteddata && augmenteddata->constant_args != key.constant_args) {
+    llvm::errs() << " sz: " << augmenteddata->constant_args.size() << "  "
+                 << key.constant_args.size() << "\n";
+    for (size_t i = 0; i < key.constant_args.size(); ++i) {
+      llvm::errs() << " i: " << i << " "
+                   << to_string(augmenteddata->constant_args[i]) << "  "
+                   << to_string(key.constant_args[i]) << "\n";
+    }
+    assert(augmenteddata->constant_args.size() == key.constant_args.size());
+    assert(augmenteddata->constant_args == key.constant_args);
+  }
+
   if (key.todiff->empty()) {
     std::string s;
     llvm::raw_string_ostream ss(s);
@@ -4167,7 +4190,7 @@ Function *EnzymeLogic::CreatePrimalAndGradient(
                                 DerivativeMode::ReverseModeCombined);
       }
       if (newBB->getTerminator())
-        newBB->getTerminator()->eraseFromParent();
+        gutils->erase(newBB->getTerminator());
       IRBuilder<> builder(newBB);
       builder.CreateUnreachable();
       continue;

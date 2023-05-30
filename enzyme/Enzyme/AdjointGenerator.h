@@ -454,10 +454,11 @@ public:
     ss << "cannot handle unknown instruction\n" << inst;
     if (CustomErrorHandler) {
       CustomErrorHandler(ss.str().c_str(), wrap(&inst), ErrorType::NoDerivative,
-                         nullptr, nullptr);
+                         gutils, nullptr);
+    } else {
+      llvm::errs() << ss.str() << "\n";
+      report_fatal_error("unknown instruction");
     }
-    llvm::errs() << ss.str() << "\n";
-    report_fatal_error("unknown instruction");
   }
 
   // Common function for falling back to the implementation
@@ -1024,10 +1025,18 @@ public:
         return;
       }
     }
-    TR.dump();
-    llvm::errs() << "oldFunc: " << *gutils->newFunc << "\n";
-    llvm::errs() << "I: " << I << "\n";
-    llvm_unreachable("Active atomic inst not yet handled");
+    std::string s;
+    llvm::raw_string_ostream ss(s);
+    ss << *I.getParent()->getParent() << "\n" << I << "\n";
+    ss << " Active atomic inst not yet handled";
+    if (CustomErrorHandler) {
+      CustomErrorHandler(ss.str().c_str(), wrap(&I), ErrorType::NoDerivative,
+                         gutils, nullptr);
+    } else {
+      TR.dump();
+      llvm::errs() << ss.str() << "\n";
+      llvm_unreachable("Active atomic inst not yet handled");
+    }
   }
 
   void visitStoreInst(llvm::StoreInst &SI) {
@@ -1486,11 +1495,13 @@ public:
             ss << "cannot handle above cast " << I << "\n";
             if (CustomErrorHandler) {
               CustomErrorHandler(ss.str().c_str(), wrap(&I),
-                                 ErrorType::NoDerivative, nullptr, nullptr);
+                                 ErrorType::NoDerivative, gutils, nullptr);
+              return (llvm::Value *)UndefValue::get(op0->getType());
+            } else {
+              TR.dump();
+              llvm::errs() << ss.str() << "\n";
+              report_fatal_error("unknown instruction");
             }
-            TR.dump();
-            llvm::errs() << ss.str() << "\n";
-            report_fatal_error("unknown instruction");
           }
         };
 
@@ -2407,7 +2418,7 @@ public:
                 Constant::getNullValue(gutils->getShadowType(BO.getType())),
                 Builder2);
             auto isZero = Builder2.CreateICmpEQ(
-                gutils->getNewFromOriginal(BO.getOperand(i)),
+                lookup(gutils->getNewFromOriginal(BO.getOperand(i)), Builder2),
                 Constant::getNullValue(BO.getType()));
             auto rule = [&](Value *idiff) {
               auto ext = Builder2.CreateBitCast(idiff, FT);
@@ -2554,10 +2565,11 @@ public:
       ss << "cannot handle unknown binary operator: " << BO << "\n";
       if (CustomErrorHandler) {
         CustomErrorHandler(ss.str().c_str(), wrap(&BO), ErrorType::NoDerivative,
-                           nullptr, nullptr);
+                           gutils, nullptr);
+      } else {
+        llvm::errs() << ss.str() << "\n";
+        report_fatal_error("unknown binary operator");
       }
-      llvm::errs() << ss.str() << "\n";
-      report_fatal_error("unknown binary operator");
     }
 
   done:;
@@ -2920,10 +2932,11 @@ public:
       ss << "cannot handle unknown binary operator: " << BO << "\n";
       if (CustomErrorHandler) {
         CustomErrorHandler(ss.str().c_str(), wrap(&BO), ErrorType::NoDerivative,
-                           nullptr, nullptr);
+                           gutils, nullptr);
+      } else {
+        llvm::errs() << ss.str() << "\n";
+        report_fatal_error("unknown binary operator");
       }
-      llvm::errs() << ss.str() << "\n";
-      report_fatal_error("unknown binary operator");
       break;
     }
   }
@@ -2970,10 +2983,11 @@ public:
          << MS;
       if (CustomErrorHandler) {
         CustomErrorHandler(ss.str().c_str(), wrap(&MS), ErrorType::NoDerivative,
-                           nullptr, nullptr);
+                           gutils, nullptr);
+      } else {
+        llvm::errs() << ss.str() << "\n";
+        report_fatal_error("non constant in memset");
       }
-      llvm::errs() << ss.str() << "\n";
-      report_fatal_error("non constant in memset");
     }
 
     if (Mode == DerivativeMode::ForwardMode) {
@@ -3301,7 +3315,6 @@ public:
             cal->setMetadata("enzyme_zerostack", m);
           cal->setAttributes(MS.getAttributes());
           cal->setCallingConv(MS.getCallingConv());
-          cal->setTailCallKind(MS.getTailCallKind());
           cal->setDebugLoc(gutils->getNewFromOriginal(MS.getDebugLoc()));
         };
 
@@ -3800,7 +3813,9 @@ public:
 #if LLVM_VERSION_MAJOR > 6
       case Intrinsic::dbg_label:
 #endif
-      case Intrinsic::dbg_addr:
+#if LLVM_VERSION_MAJOR <= 16
+      case llvm::Intrinsic::dbg_addr:
+#endif
       case Intrinsic::lifetime_start:
       case Intrinsic::assume:
       case Intrinsic::fabs:
@@ -3862,10 +3877,11 @@ public:
         ss << "cannot handle (augmented) unknown intrinsic\n" << I;
         if (CustomErrorHandler) {
           CustomErrorHandler(ss.str().c_str(), wrap(&I),
-                             ErrorType::NoDerivative, nullptr, nullptr);
+                             ErrorType::NoDerivative, gutils, nullptr);
+        } else {
+          llvm::errs() << ss.str() << "\n";
+          report_fatal_error("(augmented) unknown intrinsic");
         }
-        llvm::errs() << ss.str() << "\n";
-        report_fatal_error("(augmented) unknown intrinsic");
       }
       return;
     }
@@ -3918,7 +3934,9 @@ public:
 #if LLVM_VERSION_MAJOR > 6
       case Intrinsic::dbg_label:
 #endif
-      case Intrinsic::dbg_addr:
+#if LLVM_VERSION_MAJOR <= 16
+      case llvm::Intrinsic::dbg_addr:
+#endif
       case Intrinsic::floor:
       case Intrinsic::ceil:
       case Intrinsic::trunc:
@@ -4456,10 +4474,11 @@ public:
              << I;
         if (CustomErrorHandler) {
           CustomErrorHandler(ss.str().c_str(), wrap(&I),
-                             ErrorType::NoDerivative, nullptr, nullptr);
+                             ErrorType::NoDerivative, gutils, nullptr);
+        } else {
+          llvm::errs() << ss.str() << "\n";
+          report_fatal_error("(reverse) unknown intrinsic");
         }
-        llvm::errs() << ss.str() << "\n";
-        report_fatal_error("(reverse) unknown intrinsic");
       }
       return;
     }
@@ -5031,10 +5050,11 @@ public:
              << I;
         if (CustomErrorHandler) {
           CustomErrorHandler(ss.str().c_str(), wrap(&I),
-                             ErrorType::NoDerivative, nullptr, nullptr);
+                             ErrorType::NoDerivative, gutils, nullptr);
+        } else {
+          llvm::errs() << ss.str() << "\n";
+          report_fatal_error("(forward) unknown intrinsic");
         }
-        llvm::errs() << ss.str() << "\n";
-        report_fatal_error("(forward) unknown intrinsic");
       }
       return;
     }
@@ -5358,7 +5378,7 @@ public:
             gutils->getNewFromOriginal(call.getDebugLoc()));
         BuilderZ.SetInsertPoint(
             gutils->getNewFromOriginal(&call)->getNextNode());
-        gutils->getNewFromOriginal(&call)->eraseFromParent();
+        gutils->erase(gutils->getNewFromOriginal(&call));
       } else {
         assert(0 && "unhandled unknown outline");
       }
@@ -5404,6 +5424,16 @@ public:
                            .CreateAlloca(tape->getType());
           Builder2.CreateStore(tape, alloc);
           args.push_back(alloc);
+        }
+
+        if (Mode == DerivativeMode::ReverseModeGradient && subdata) {
+          for (size_t i = 0; i < argsInverted.size(); i++) {
+            if (subdata->constant_args[i] == argsInverted[i])
+              continue;
+            assert(subdata->constant_args[i] == DIFFE_TYPE::DUP_ARG);
+            assert(argsInverted[i] == DIFFE_TYPE::DUP_NONEED);
+            argsInverted[i] = DIFFE_TYPE::DUP_ARG;
+          }
         }
 
         newcalled = gutils->Logic.CreatePrimalAndGradient(
@@ -7065,10 +7095,11 @@ public:
           ss << " unhandled mpi_allreduce op: " << *orig_op << "\n";
           if (CustomErrorHandler) {
             CustomErrorHandler(ss.str().c_str(), wrap(&call),
-                               ErrorType::NoDerivative, nullptr, nullptr);
+                               ErrorType::NoDerivative, gutils, nullptr);
+          } else {
+            llvm::errs() << ss.str() << "\n";
+            report_fatal_error("unhandled mpi_allreduce op");
           }
-          llvm::errs() << ss.str() << "\n";
-          report_fatal_error("unhandled mpi_allreduce op");
         }
 
         Value *shadow_recvbuf = gutils->invertPointerM(orig_recvbuf, Builder2);
@@ -7320,10 +7351,11 @@ public:
           ss << " unhandled mpi_allreduce op: " << *orig_op << "\n";
           if (CustomErrorHandler) {
             CustomErrorHandler(ss.str().c_str(), wrap(&call),
-                               ErrorType::NoDerivative, nullptr, nullptr);
+                               ErrorType::NoDerivative, gutils, nullptr);
+          } else {
+            llvm::errs() << ss.str() << "\n";
+            report_fatal_error("unhandled mpi_allreduce op");
           }
-          llvm::errs() << ss.str() << "\n";
-          report_fatal_error("unhandled mpi_allreduce op");
         }
 
         Value *shadow_recvbuf = gutils->invertPointerM(orig_recvbuf, Builder2);
@@ -8236,6 +8268,11 @@ public:
           structAttrs[args.size()].push_back(
               call.getParamAttr(i, "enzymejl_returnRoots"));
         }
+        for (auto ty : PrimalParamAttrsToPreserve)
+          if (call.getAttributes().hasParamAttr(i, ty)) {
+            auto attr = call.getAttributes().getParamAttr(i, ty);
+            structAttrs[args.size()].push_back(attr);
+          }
 
         auto argi = gutils->getNewFromOriginal(call.getArgOperand(i));
 
@@ -8278,6 +8315,13 @@ public:
         if (argTy == DIFFE_TYPE::CONSTANT) {
           continue;
         }
+
+        if (gutils->getWidth() == 1)
+          for (auto ty : ShadowParamAttrsToPreserve)
+            if (call.getAttributes().hasParamAttr(i, ty)) {
+              auto attr = call.getAttributes().getParamAttr(i, ty);
+              structAttrs[args.size()].push_back(attr);
+            }
 
         if (call.getAttributes().hasParamAttr(i, "enzymejl_returnRoots")) {
           if (gutils->getWidth() == 1) {
@@ -8543,6 +8587,11 @@ public:
 #endif
         );
       }
+      for (auto ty : PrimalParamAttrsToPreserve)
+        if (call.getAttributes().hasParamAttr(i, ty)) {
+          auto attr = call.getAttributes().getParamAttr(i, ty);
+          structAttrs[pre_args.size()].push_back(attr);
+        }
 
       auto argTy = gutils->getDiffeType(call.getArgOperand(i), foreignFunction);
 
@@ -8602,6 +8651,13 @@ public:
       auto argType = argi->getType();
 
       if (argTy == DIFFE_TYPE::DUP_ARG || argTy == DIFFE_TYPE::DUP_NONEED) {
+        if (gutils->getWidth() == 1)
+          for (auto ty : ShadowParamAttrsToPreserve)
+            if (call.getAttributes().hasParamAttr(i, ty)) {
+              auto attr = call.getAttributes().getParamAttr(i, ty);
+              structAttrs[pre_args.size()].push_back(attr);
+            }
+
         if (call.getAttributes().hasParamAttr(i, "enzymejl_returnRoots")) {
           if (gutils->getWidth() == 1) {
             structAttrs[pre_args.size()].push_back(
@@ -8729,12 +8785,12 @@ public:
           ss << "cannot find shadow for " << *callval;
           if (CustomErrorHandler) {
             CustomErrorHandler(ss.str().c_str(), wrap(&call),
-                               ErrorType::NoDerivative, nullptr, nullptr);
+                               ErrorType::NoDerivative, gutils, nullptr);
+          } else {
+            llvm::errs() << *gutils->oldFunc << "\n";
+            llvm::errs() << ss.str() << "\n";
+            report_fatal_error("cannot call active int operand");
           }
-
-          llvm::errs() << *gutils->oldFunc << "\n";
-          llvm::errs() << ss.str() << "\n";
-          report_fatal_error("cannot call active int operand");
         }
         newcalled = gutils->invertPointerM(callval, BuilderZ);
 
@@ -9161,6 +9217,16 @@ public:
                                  ? DerivativeMode::ReverseModeCombined
                                  : DerivativeMode::ReverseModeGradient;
     if (called) {
+      if (Mode == DerivativeMode::ReverseModeGradient && subdata) {
+        for (size_t i = 0; i < argsInverted.size(); i++) {
+          if (subdata->constant_args[i] == argsInverted[i])
+            continue;
+          assert(subdata->constant_args[i] == DIFFE_TYPE::DUP_ARG);
+          assert(argsInverted[i] == DIFFE_TYPE::DUP_NONEED);
+          argsInverted[i] = DIFFE_TYPE::DUP_ARG;
+        }
+      }
+
       newcalled = gutils->Logic.CreatePrimalAndGradient(
           (ReverseCacheKey){.todiff = cast<Function>(called),
                             .retType = subretType,
@@ -11993,7 +12059,78 @@ public:
       }
       return;
     }
-    if (funcName == "posix_memalign") {
+    if (funcName == "cuStreamCreate") {
+      Value *val = nullptr;
+      llvm::Type *PT = Type::getInt8PtrTy(call.getContext());
+#if LLVM_VERSION_MAJOR >= 15
+      if (call.getContext().supportsTypedPointers()) {
+#endif
+        if (isa<PointerType>(call.getArgOperand(0)->getType()))
+          PT = call.getArgOperand(0)->getType()->getPointerElementType();
+#if LLVM_VERSION_MAJOR >= 15
+      }
+#endif
+      if (Mode == DerivativeMode::ReverseModePrimal ||
+          Mode == DerivativeMode::ReverseModeCombined) {
+        val = gutils->getNewFromOriginal(call.getOperand(0));
+        if (!isa<PointerType>(val->getType()))
+          val = BuilderZ.CreateIntToPtr(val, PointerType::getUnqual(PT));
+#if LLVM_VERSION_MAJOR > 7
+        val = BuilderZ.CreateLoad(PT, val);
+#else
+        val = BuilderZ.CreateLoad(val);
+#endif
+        val = gutils->cacheForReverse(BuilderZ, val,
+                                      getIndex(&call, CacheType::Tape));
+
+      } else if (Mode == DerivativeMode::ReverseModeGradient) {
+        PHINode *toReplace =
+            BuilderZ.CreatePHI(PT, 1, call.getName() + "_psxtmp");
+        val = gutils->cacheForReverse(BuilderZ, toReplace,
+                                      getIndex(&call, CacheType::Tape));
+      }
+      if (Mode == DerivativeMode::ReverseModeGradient ||
+          Mode == DerivativeMode::ReverseModeCombined) {
+        IRBuilder<> Builder2(call.getParent());
+        getReverseBuilder(Builder2);
+        val = gutils->lookupM(val, Builder2);
+        auto FreeFunc = gutils->newFunc->getParent()->getOrInsertFunction(
+            "cuStreamDestroy", call.getType(), PT);
+        Value *nargs[] = {val};
+        Builder2.CreateCall(FreeFunc, nargs);
+      }
+      if (Mode == DerivativeMode::ReverseModeGradient)
+        eraseIfUnused(call, /*erase*/ true, /*check*/ false);
+      return;
+    }
+    if (funcName == "cuStreamDestroy") {
+      if (Mode == DerivativeMode::ReverseModeGradient ||
+          Mode == DerivativeMode::ReverseModeCombined)
+        eraseIfUnused(call, /*erase*/ true, /*check*/ false);
+      return;
+    }
+    if (funcName == "cuStreamSynchronize") {
+      if (Mode == DerivativeMode::ReverseModeGradient ||
+          Mode == DerivativeMode::ReverseModeCombined) {
+        IRBuilder<> Builder2(call.getParent());
+        getReverseBuilder(Builder2);
+        Value *nargs[] = {gutils->lookupM(
+            gutils->getNewFromOriginal(call.getOperand(0)), Builder2)};
+#if LLVM_VERSION_MAJOR >= 11
+        auto callval = call.getCalledOperand();
+#else
+        auto callval = call.getCalledValue();
+#endif
+        Builder2.CreateCall(call.getFunctionType(), callval, nargs);
+      }
+      if (Mode == DerivativeMode::ReverseModeGradient)
+        eraseIfUnused(call, /*erase*/ true, /*check*/ false);
+      return;
+    }
+    if (funcName == "posix_memalign" || funcName == "cuMemAllocAsync" ||
+        funcName == "cuMemAlloc" || funcName == "cuMemAlloc_v2" ||
+        funcName == "cudaMalloc" || funcName == "cudaMallocAsync" ||
+        funcName == "cudaMallocHost" || funcName == "cudaMallocFromPoolAsync") {
       bool constval = gutils->isConstantInstruction(&call);
 
       Value *val;
@@ -12001,59 +12138,134 @@ public:
 #if LLVM_VERSION_MAJOR >= 15
       if (call.getContext().supportsTypedPointers()) {
 #endif
-        PT = call.getArgOperand(0)->getType()->getPointerElementType();
+        if (isa<PointerType>(call.getArgOperand(0)->getType()))
+          PT = call.getArgOperand(0)->getType()->getPointerElementType();
 #if LLVM_VERSION_MAJOR >= 15
       }
 #endif
       if (!constval) {
+        Value *stream = nullptr;
+        if (funcName == "cuMemAllocAsync")
+          stream = gutils->getNewFromOriginal(call.getArgOperand(2));
+        else if (funcName == "cudaMallocAsync")
+          stream = gutils->getNewFromOriginal(call.getArgOperand(2));
+        else if (funcName == "cudaMallocFromPoolAsync")
+          stream = gutils->getNewFromOriginal(call.getArgOperand(3));
+
+        auto M = gutils->newFunc->getParent();
+
         if (Mode == DerivativeMode::ReverseModePrimal ||
             Mode == DerivativeMode::ReverseModeCombined ||
             Mode == DerivativeMode::ForwardMode) {
           Value *ptrshadow =
               gutils->invertPointerM(call.getArgOperand(0), BuilderZ);
-          BuilderZ.CreateCall(
-              called,
-              {ptrshadow, gutils->getNewFromOriginal(call.getArgOperand(1)),
-               gutils->getNewFromOriginal(call.getArgOperand(2))});
+          SmallVector<Value *, 1> args;
+          SmallVector<ValueType, 1> valtys;
+          args.push_back(ptrshadow);
+          valtys.push_back(ValueType::Shadow);
+#if LLVM_VERSION_MAJOR >= 14
+          for (size_t i = 1; i < call.arg_size(); ++i)
+#else
+          for (size_t i = 1; i < call.getNumArgOperands(); ++i)
+#endif
+          {
+            args.push_back(gutils->getNewFromOriginal(call.getArgOperand(i)));
+            valtys.push_back(ValueType::Primal);
+          }
+
+          auto Defs = gutils->getInvertedBundles(&call, valtys, BuilderZ,
+                                                 /*lookup*/ false);
+
+          val = applyChainRule(
+              PT, BuilderZ,
+              [&](Value *ptrshadow) {
+                args[0] = ptrshadow;
+
+                BuilderZ.CreateCall(called, args, Defs);
+                if (!isa<PointerType>(ptrshadow->getType()))
+                  ptrshadow = BuilderZ.CreateIntToPtr(
+                      ptrshadow, PointerType::getUnqual(PT));
 #if LLVM_VERSION_MAJOR > 7
-          val = BuilderZ.CreateLoad(PT, ptrshadow);
+                Value *val = BuilderZ.CreateLoad(PT, ptrshadow);
 #else
-          val = BuilderZ.CreateLoad(ptrshadow);
-#endif
-          val = gutils->cacheForReverse(BuilderZ, val,
-                                        getIndex(&call, CacheType::Shadow));
-
-          auto dst_arg = BuilderZ.CreateBitCast(
-              val, Type::getInt8PtrTy(call.getContext()));
-          auto val_arg =
-              ConstantInt::get(Type::getInt8Ty(call.getContext()), 0);
-          auto len_arg = BuilderZ.CreateZExtOrTrunc(
-              gutils->getNewFromOriginal(call.getArgOperand(2)),
-              Type::getInt64Ty(call.getContext()));
-          auto volatile_arg = ConstantInt::getFalse(call.getContext());
-
-#if LLVM_VERSION_MAJOR == 6
-          auto align_arg =
-              ConstantInt::get(Type::getInt32Ty(call.getContext()), 1);
-          Value *nargs[] = {dst_arg, val_arg, len_arg, align_arg, volatile_arg};
-#else
-          Value *nargs[] = {dst_arg, val_arg, len_arg, volatile_arg};
+                Value *val = BuilderZ.CreateLoad(ptrshadow);
 #endif
 
-          Type *tys[] = {dst_arg->getType(), len_arg->getType()};
+                auto dst_arg = BuilderZ.CreateBitCast(
+                    val, Type::getInt8PtrTy(call.getContext()));
 
-          auto memset = cast<CallInst>(BuilderZ.CreateCall(
-              Intrinsic::getDeclaration(gutils->newFunc->getParent(),
-                                        Intrinsic::memset, tys),
-              nargs));
-          // memset->addParamAttr(0, Attribute::getWithAlignment(Context,
-          // inst->getAlignment()));
-          memset->addParamAttr(0, Attribute::NonNull);
+                auto val_arg =
+                    ConstantInt::get(Type::getInt8Ty(call.getContext()), 0);
+                auto len_arg = gutils->getNewFromOriginal(
+                    call.getArgOperand((funcName == "posix_memalign") ? 2 : 1));
+
+                if (funcName == "posix_memalign" ||
+                    funcName == "cudaMallocHost") {
+                  auto volatile_arg = ConstantInt::getFalse(call.getContext());
+
+                  Value *nargs[] = {dst_arg, val_arg, len_arg, volatile_arg};
+
+                  Type *tys[] = {dst_arg->getType(), len_arg->getType()};
+
+                  auto memset = cast<CallInst>(BuilderZ.CreateCall(
+                      Intrinsic::getDeclaration(gutils->newFunc->getParent(),
+                                                Intrinsic::memset, tys),
+                      nargs));
+                  // memset->addParamAttr(0,
+                  // Attribute::getWithAlignment(Context,
+                  // inst->getAlignment()));
+                  memset->addParamAttr(0, Attribute::NonNull);
+                } else if (funcName == "cudaMalloc") {
+                  Type *tys[] = {PT, val_arg->getType(), len_arg->getType()};
+                  auto F = M->getOrInsertFunction(
+                      "cudaMemset",
+                      FunctionType::get(call.getType(), tys, false));
+                  Value *nargs[] = {dst_arg, val_arg, len_arg};
+                  auto memset = cast<CallInst>(BuilderZ.CreateCall(F, nargs));
+                  memset->addParamAttr(0, Attribute::NonNull);
+                } else if (funcName == "cudaMallocAsync" ||
+                           funcName == "cudaMallocFromPoolAsync") {
+                  Type *tys[] = {PT, val_arg->getType(), len_arg->getType(),
+                                 stream->getType()};
+                  auto F = M->getOrInsertFunction(
+                      "cudaMemsetAsync",
+                      FunctionType::get(call.getType(), tys, false));
+                  Value *nargs[] = {dst_arg, val_arg, len_arg, stream};
+                  auto memset = cast<CallInst>(BuilderZ.CreateCall(F, nargs));
+                  memset->addParamAttr(0, Attribute::NonNull);
+                } else if (funcName == "cuMemAllocAsync") {
+                  Type *tys[] = {PT, val_arg->getType(), len_arg->getType(),
+                                 stream->getType()};
+                  auto F = M->getOrInsertFunction(
+                      "cuMemsetD8Async",
+                      FunctionType::get(call.getType(), tys, false));
+                  Value *nargs[] = {dst_arg, val_arg, len_arg, stream};
+                  auto memset = cast<CallInst>(BuilderZ.CreateCall(F, nargs));
+                  memset->addParamAttr(0, Attribute::NonNull);
+                } else if (funcName == "cuMemAlloc" ||
+                           funcName == "cuMemAlloc_v2") {
+                  Type *tys[] = {PT, val_arg->getType(), len_arg->getType()};
+                  auto F = M->getOrInsertFunction(
+                      "cuMemsetD8",
+                      FunctionType::get(call.getType(), tys, false));
+                  Value *nargs[] = {dst_arg, val_arg, len_arg};
+                  auto memset = cast<CallInst>(BuilderZ.CreateCall(F, nargs));
+                  memset->addParamAttr(0, Attribute::NonNull);
+                } else {
+                  llvm_unreachable("unhandled allocation");
+                }
+                return val;
+              },
+              ptrshadow);
+
+          if (Mode != DerivativeMode::ForwardMode)
+            val = gutils->cacheForReverse(BuilderZ, val,
+                                          getIndex(&call, CacheType::Tape));
         } else if (Mode == DerivativeMode::ReverseModeGradient) {
-          PHINode *toReplace =
-              BuilderZ.CreatePHI(PT, 1, call.getName() + "_psxtmp");
+          PHINode *toReplace = BuilderZ.CreatePHI(gutils->getShadowType(PT), 1,
+                                                  call.getName() + "_psxtmp");
           val = gutils->cacheForReverse(BuilderZ, toReplace,
-                                        getIndex(&call, CacheType::Shadow));
+                                        getIndex(&call, CacheType::Tape));
         }
 
         if (Mode == DerivativeMode::ReverseModeCombined ||
@@ -12063,11 +12275,52 @@ public:
             getReverseBuilder(Builder2);
             Value *tofree = gutils->lookupM(val, Builder2, ValueToValueMapTy(),
                                             /*tryLegalRecompute*/ false);
-            auto M = gutils->newFunc->getParent();
+
             Type *VoidTy = Type::getVoidTy(M->getContext());
             Type *IntPtrTy = Type::getInt8PtrTy(M->getContext());
-            auto FreeFunc = M->getOrInsertFunction("free", VoidTy, IntPtrTy);
-            Builder2.CreateCall(FreeFunc, tofree);
+
+            Value *streamL = nullptr;
+            if (stream)
+              streamL = gutils->lookupM(stream, Builder2);
+
+            applyChainRule(
+                BuilderZ,
+                [&](Value *tofree) {
+                  if (funcName == "posix_memalign") {
+                    auto FreeFunc =
+                        M->getOrInsertFunction("free", VoidTy, IntPtrTy);
+                    Builder2.CreateCall(FreeFunc, tofree);
+                  } else if (funcName == "cuMemAllocAsync") {
+                    auto FreeFunc = M->getOrInsertFunction(
+                        "cuMemFreeAsync", VoidTy, IntPtrTy, streamL->getType());
+                    Value *nargs[] = {tofree, streamL};
+                    Builder2.CreateCall(FreeFunc, nargs);
+                  } else if (funcName == "cuMemAlloc" ||
+                             funcName == "cuMemAlloc_v2") {
+                    auto FreeFunc =
+                        M->getOrInsertFunction("cuMemFree", VoidTy, IntPtrTy);
+                    Value *nargs[] = {tofree};
+                    Builder2.CreateCall(FreeFunc, nargs);
+                  } else if (funcName == "cudaMalloc") {
+                    auto FreeFunc =
+                        M->getOrInsertFunction("cudaFree", VoidTy, IntPtrTy);
+                    Value *nargs[] = {tofree};
+                    Builder2.CreateCall(FreeFunc, nargs);
+                  } else if (funcName == "cudaMallocAsync" ||
+                             funcName == "cudaMallocFromPoolAsync") {
+                    auto FreeFunc = M->getOrInsertFunction(
+                        "cudaFreeAsync", VoidTy, IntPtrTy, streamL->getType());
+                    Value *nargs[] = {tofree, streamL};
+                    Builder2.CreateCall(FreeFunc, nargs);
+                  } else if (funcName == "cudaMallocHost") {
+                    auto FreeFunc = M->getOrInsertFunction("cudaFreeHost",
+                                                           VoidTy, IntPtrTy);
+                    Value *nargs[] = {tofree};
+                    Builder2.CreateCall(FreeFunc, nargs);
+                  } else
+                    llvm_unreachable("unknown function to free");
+                },
+                tofree);
           }
         }
       }
@@ -12092,23 +12345,61 @@ public:
         //}
       } else if (Mode == DerivativeMode::ReverseModeCombined && shouldFree()) {
         IRBuilder<> Builder2(newCall->getNextNode());
+        auto ptrv = gutils->getNewFromOriginal(call.getOperand(0));
+        if (!isa<PointerType>(ptrv->getType()))
+          ptrv = BuilderZ.CreateIntToPtr(ptrv, PointerType::getUnqual(PT));
 #if LLVM_VERSION_MAJOR > 7
-        auto load = Builder2.CreateLoad(
-            PT, gutils->getNewFromOriginal(call.getOperand(0)),
-            "posix_preread");
+        auto load = Builder2.CreateLoad(PT, ptrv, "posix_preread");
 #else
-        auto load = Builder2.CreateLoad(
-            gutils->getNewFromOriginal(call.getOperand(0)), "posix_preread");
+        auto load = Builder2.CreateLoad(ptrv, "posix_preread");
 #endif
         Builder2.SetInsertPoint(&call);
         getReverseBuilder(Builder2);
-        auto load2 = gutils->lookupM(load, Builder2, ValueToValueMapTy(),
-                                     /*tryLegal*/ false);
+        auto tofree = gutils->lookupM(load, Builder2, ValueToValueMapTy(),
+                                      /*tryLegal*/ false);
+        Value *streamL = nullptr;
+        if (funcName == "cuMemAllocAsync")
+          streamL = gutils->getNewFromOriginal(call.getArgOperand(2));
+        else if (funcName == "cudaMallocAsync")
+          streamL = gutils->getNewFromOriginal(call.getArgOperand(2));
+        else if (funcName == "cudaMallocFromPoolAsync")
+          streamL = gutils->getNewFromOriginal(call.getArgOperand(3));
+        if (streamL)
+          streamL = gutils->lookupM(streamL, Builder2);
+
         auto M = gutils->newFunc->getParent();
         Type *VoidTy = Type::getVoidTy(M->getContext());
         Type *IntPtrTy = Type::getInt8PtrTy(M->getContext());
-        auto FreeFunc = M->getOrInsertFunction("free", VoidTy, IntPtrTy);
-        Builder2.CreateCall(FreeFunc, load2);
+
+        if (funcName == "posix_memalign") {
+          auto FreeFunc = M->getOrInsertFunction("free", VoidTy, IntPtrTy);
+          Builder2.CreateCall(FreeFunc, tofree);
+        } else if (funcName == "cuMemAllocAsync") {
+          auto FreeFunc = M->getOrInsertFunction("cuMemFreeAsync", VoidTy,
+                                                 IntPtrTy, streamL->getType());
+          Value *nargs[] = {tofree, streamL};
+          Builder2.CreateCall(FreeFunc, nargs);
+        } else if (funcName == "cuMemAlloc" || funcName == "cuMemAlloc_v2") {
+          auto FreeFunc = M->getOrInsertFunction("cuMemFree", VoidTy, IntPtrTy);
+          Value *nargs[] = {tofree};
+          Builder2.CreateCall(FreeFunc, nargs);
+        } else if (funcName == "cudaMalloc") {
+          auto FreeFunc = M->getOrInsertFunction("cudaFree", VoidTy, IntPtrTy);
+          Value *nargs[] = {tofree};
+          Builder2.CreateCall(FreeFunc, nargs);
+        } else if (funcName == "cudaMallocAsync" ||
+                   funcName == "cudaMallocFromPoolAsync") {
+          auto FreeFunc = M->getOrInsertFunction("cudaFreeAsync", VoidTy,
+                                                 IntPtrTy, streamL->getType());
+          Value *nargs[] = {tofree, streamL};
+          Builder2.CreateCall(FreeFunc, nargs);
+        } else if (funcName == "cudaMallocHost") {
+          auto FreeFunc =
+              M->getOrInsertFunction("cudaFreeHost", VoidTy, IntPtrTy);
+          Value *nargs[] = {tofree};
+          Builder2.CreateCall(FreeFunc, nargs);
+        } else
+          llvm_unreachable("unknown function to free");
       }
 
       return;

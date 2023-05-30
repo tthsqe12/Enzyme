@@ -32,8 +32,6 @@
 
 #include "GradientUtils.h"
 #include "MustExitScalarEvolution.h"
-#include "SCEV/ScalarEvolution.h"
-#include "SCEV/ScalarEvolutionExpander.h"
 #include "Utils.h"
 
 #include "DifferentialUseAnalysis.h"
@@ -52,7 +50,6 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/Triple.h"
 
 #include "llvm/Support/AMDGPUMetadata.h"
 #include "llvm/Support/Casting.h"
@@ -161,16 +158,15 @@ static bool isPotentialLastLoopValue(llvm::Value *val,
   return false;
 }
 
-GradientUtils::GradientUtils(EnzymeLogic &Logic, Function *newFunc_,
-                             Function *oldFunc_, TargetLibraryInfo &TLI_,
-                             TypeAnalysis &TA_, TypeResults TR_,
-                             ValueToValueMapTy &invertedPointers_,
-                             const SmallPtrSetImpl<Value *> &constantvalues_,
-                             const SmallPtrSetImpl<Value *> &activevals_,
-                             DIFFE_TYPE ReturnActivity,
-                             ArrayRef<DIFFE_TYPE> ArgDiffeTypes_,
-                             ValueToValueMapTy &originalToNewFn_,
-                             DerivativeMode mode, unsigned width, bool omp)
+GradientUtils::GradientUtils(
+    EnzymeLogic &Logic, Function *newFunc_, Function *oldFunc_,
+    TargetLibraryInfo &TLI_, TypeAnalysis &TA_, TypeResults TR_,
+    ValueToValueMapTy &invertedPointers_,
+    const SmallPtrSetImpl<Value *> &constantvalues_,
+    const SmallPtrSetImpl<Value *> &activevals_, DIFFE_TYPE ReturnActivity,
+    ArrayRef<DIFFE_TYPE> ArgDiffeTypes_,
+    llvm::ValueMap<const llvm::Value *, AssertingReplacingVH> &originalToNewFn_,
+    DerivativeMode mode, unsigned width, bool omp)
     : CacheUtility(TLI_, newFunc_), Logic(Logic), mode(mode), oldFunc(oldFunc_),
       invertedPointers(),
       OrigDT(Logic.PPC.FAM.getResult<llvm::DominatorTreeAnalysis>(*oldFunc_)),
@@ -595,7 +591,8 @@ BasicBlock *GradientUtils::getOriginalFromNew(const BasicBlock *newinst) const {
   assert(newinst->getParent() == newFunc);
   auto found = newToOriginalFn.find(newinst);
   assert(found != newToOriginalFn.end());
-  return cast<BasicBlock>(found->second);
+  Value *res = found->second;
+  return cast<BasicBlock>(res);
 }
 
 Value *GradientUtils::isOriginal(const Value *newinst) const {
@@ -3332,7 +3329,6 @@ BasicBlock *GradientUtils::getReverseOrLatchMerge(BasicBlock *BB,
 #endif
                     cal->setAttributes(CI->getAttributes());
                     cal->setCallingConv(CI->getCallingConv());
-                    cal->setTailCallKind(CI->getTailCallKind());
                     cal->setDebugLoc(getNewFromOriginal(I.getDebugLoc()));
                   } else {
                     assert(isDeallocationFunction(funcName, TLI));
@@ -3398,7 +3394,6 @@ BasicBlock *GradientUtils::getReverseOrLatchMerge(BasicBlock *BB,
                   cal->setName("remat_" + CI->getName());
                   cal->setAttributes(CI->getAttributes());
                   cal->setCallingConv(CI->getCallingConv());
-                  cal->setTailCallKind(CI->getTailCallKind());
                   cal->setDebugLoc(getNewFromOriginal(I.getDebugLoc()));
                   storeInstructionInCache(lctx, NB, cal, cache);
                 } else {
@@ -3521,7 +3516,6 @@ BasicBlock *GradientUtils::getReverseOrLatchMerge(BasicBlock *BB,
                     cal->copyMetadata(*MS, ToCopy2);
                     cal->setAttributes(MS->getAttributes());
                     cal->setCallingConv(MS->getCallingConv());
-                    cal->setTailCallKind(MS->getTailCallKind());
                     cal->setDebugLoc(getNewFromOriginal(I.getDebugLoc()));
                   }
                 } else if (auto CI = dyn_cast<CallInst>(&I)) {
@@ -3556,7 +3550,6 @@ BasicBlock *GradientUtils::getReverseOrLatchMerge(BasicBlock *BB,
 #endif
                       cal->setAttributes(CI->getAttributes());
                       cal->setCallingConv(CI->getCallingConv());
-                      cal->setTailCallKind(CI->getTailCallKind());
                       cal->setDebugLoc(getNewFromOriginal(I.getDebugLoc()));
                     }
                   } else {
@@ -3624,8 +3617,6 @@ BasicBlock *GradientUtils::getReverseOrLatchMerge(BasicBlock *BB,
                           orig->getAttributes());
                       cast<CallInst>(anti)->setCallingConv(
                           orig->getCallingConv());
-                      cast<CallInst>(anti)->setTailCallKind(
-                          orig->getTailCallKind());
                       cast<CallInst>(anti)->setDebugLoc(
                           getNewFromOriginal(I.getDebugLoc()));
 
@@ -4336,7 +4327,7 @@ GradientUtils *GradientUtils::CreateFromClone(
   SmallPtrSet<Instruction *, 4> constants;
   SmallPtrSet<Instruction *, 20> nonconstant;
   SmallPtrSet<Value *, 2> returnvals;
-  ValueToValueMapTy originalToNew;
+  llvm::ValueMap<const llvm::Value *, AssertingReplacingVH> originalToNew;
 
   SmallPtrSet<Value *, 4> constant_values;
   SmallPtrSet<Value *, 4> nonconstant_values;
@@ -8512,7 +8503,9 @@ void GradientUtils::computeForwardingProperties(Instruction *V) {
 #if LLVM_VERSION_MAJOR > 6
       case Intrinsic::dbg_label:
 #endif
-      case Intrinsic::dbg_addr:
+#if LLVM_VERSION_MAJOR <= 16
+      case llvm::Intrinsic::dbg_addr:
+#endif
       case Intrinsic::lifetime_end:
         break;
       case Intrinsic::memset: {
@@ -9009,7 +9002,6 @@ llvm::CallInst *freeKnownAllocation(llvm::IRBuilder<> &builder,
 #endif
             "", builder.GetInsertBlock()));
     freecall->setDebugLoc(debuglocation);
-    freecall->setTailCall();
     if (isa<CallInst>(tofree) &&
         cast<CallInst>(tofree)->getAttributes().hasAttribute(
             AttributeList::ReturnIndex, Attribute::NonNull)) {
@@ -9127,7 +9119,6 @@ llvm::CallInst *freeKnownAllocation(llvm::IRBuilder<> &builder,
       CallInst::Create(freevalue, {builder.CreatePointerCast(tofree, IntPtrTy)},
 #endif
                        "", builder.GetInsertBlock()));
-  freecall->setTailCall();
   freecall->setDebugLoc(debuglocation);
   if (isa<CallInst>(tofree) &&
       cast<CallInst>(tofree)->getAttributes().hasAttribute(

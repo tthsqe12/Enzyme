@@ -22,17 +22,28 @@
 //
 //===----------------------------------------------------------------------===//
 #include "CApi.h"
+#if LLVM_VERSION_MAJOR >= 16
+#define private public
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
+#undef private
+#else
 #include "SCEV/ScalarEvolution.h"
 #include "SCEV/ScalarEvolutionExpander.h"
+#endif
 
 #include "DiffeGradientUtils.h"
 #include "EnzymeLogic.h"
 #include "GradientUtils.h"
 #include "LibraryFuncs.h"
+#if LLVM_VERSION_MAJOR >= 16
+#include "llvm/Analysis/TargetLibraryInfo.h"
+#else
 #include "SCEV/TargetLibraryInfo.h"
+#endif
 #include "TraceInterface.h"
 
-#include "llvm/ADT/Triple.h"
+// #include "llvm/ADT/Triple.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/IR/DIBuilder.h"
@@ -291,6 +302,15 @@ void *EnzymeAnalyzeTypes(EnzymeTypeAnalysisRef TAR, CFnTypeInfo CTI,
 
 void *EnzymeGradientUtilsTypeAnalyzer(GradientUtils *G) {
   return (void *)&G->TR.analyzer;
+}
+
+void EnzymeGradientUtilsErase(GradientUtils *G, LLVMValueRef I) {
+  return G->erase(cast<Instruction>(unwrap(I)));
+}
+
+void EnzymeGradientUtilsReplaceAWithB(GradientUtils *G, LLVMValueRef A,
+                                      LLVMValueRef B) {
+  return G->replaceAWithB(unwrap(A), unwrap(B));
 }
 
 void EnzymeRegisterAllocationHandler(char *Name, CustomShadowAlloc AHandle,
@@ -1615,12 +1635,22 @@ void EnzymeFixupJuliaCallingConvention(LLVMValueRef F_C) {
       Bundles.emplace_back(CI->getOperandBundleAt(I));
     auto NC = B.CreateCall(NewF, vals, Bundles);
     NC->setAttributes(NewAttrs);
-    NC->copyMetadata(*CI);
+
+    SmallVector<std::pair<unsigned, MDNode *>, 4> TheMDs;
+    CI->getAllMetadataOtherThanDebugLoc(TheMDs);
+    SmallVector<unsigned, 1> toCopy;
+    for (auto pair : TheMDs)
+      if (pair.first != LLVMContext::MD_range)
+        toCopy.push_back(pair.first);
+    NC->copyMetadata(*CI, toCopy);
+    NC->setDebugLoc(CI->getDebugLoc());
 
     sretCount = 0;
     if (!RT->isVoidTy()) {
       auto gep = ST ? B.CreateConstInBoundsGEP2_32(ST, sret, 0, 0) : sret;
       auto ld = B.CreateLoad(RT, gep);
+      if (auto MD = CI->getMetadata(LLVMContext::MD_range))
+        ld->setMetadata(LLVMContext::MD_range, MD);
       ld->takeName(CI);
       CI->replaceAllUsesWith(ld);
       sretCount++;
