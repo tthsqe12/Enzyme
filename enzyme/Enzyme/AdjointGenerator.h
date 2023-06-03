@@ -202,12 +202,12 @@ public:
   }
 
   llvm::Value *MPI_TYPE_SIZE(llvm::Value *DT, llvm::IRBuilder<> &B,
-                             llvm::Type *intType,
+                             llvm::Type *IntTy, llvm::Type *MPIDatatypeTy,
                              llvm::BasicBlock *allocBlock = nullptr) {
     using namespace llvm;
 
-    if (DT->getType()->isIntegerTy())
-      DT = B.CreateIntToPtr(DT, Type::getInt8PtrTy(DT->getContext()));
+    //    if (DT->getType()->isIntegerTy())
+    //      DT = B.CreateIntToPtr(DT, Type::getInt8PtrTy(DT->getContext()));
 
     if (Constant *C = dyn_cast<Constant>(DT)) {
       while (ConstantExpr *CE = dyn_cast<ConstantExpr>(C)) {
@@ -215,30 +215,31 @@ public:
       }
       if (auto GV = dyn_cast<GlobalVariable>(C)) {
         if (GV->getName() == "ompi_mpi_double") {
-          return ConstantInt::get(intType, 8, false);
+          return ConstantInt::get(IntTy, 8, false);
         } else if (GV->getName() == "ompi_mpi_float") {
-          return ConstantInt::get(intType, 4, false);
+          return ConstantInt::get(IntTy, 4, false);
         }
       }
     }
-    Type *pargs[] = {Type::getInt8PtrTy(DT->getContext()),
-                     PointerType::getUnqual(intType)};
-    auto FT = FunctionType::get(intType, pargs, false);
+    Type *pargs[] = {MPIDatatypeTy, PointerType::getUnqual(IntTy)};
+    auto FT = FunctionType::get(IntTy, pargs, false);
     auto alloc =
         IRBuilder<>((allocBlock) ? allocBlock : gutils->inversionAllocs)
-            .CreateAlloca(intType);
+            .CreateAlloca(IntTy);
     llvm::Value *args[] = {DT, alloc};
     if (DT->getType() != pargs[0])
       args[0] = B.CreateBitCast(args[0], pargs[0]);
     AttributeList AL;
-    AL = AL.addParamAttribute(DT->getContext(), 0,
-                              Attribute::AttrKind::ReadOnly);
-    AL = AL.addParamAttribute(DT->getContext(), 0,
-                              Attribute::AttrKind::NoCapture);
-    AL =
-        AL.addParamAttribute(DT->getContext(), 0, Attribute::AttrKind::NoAlias);
-    AL =
-        AL.addParamAttribute(DT->getContext(), 0, Attribute::AttrKind::NonNull);
+    if (MPIDatatypeTy->isPointerTy()) {
+      AL = AL.addParamAttribute(DT->getContext(), 0,
+                                Attribute::AttrKind::ReadOnly);
+      AL = AL.addParamAttribute(DT->getContext(), 0,
+                                Attribute::AttrKind::NoCapture);
+      AL = AL.addParamAttribute(DT->getContext(), 0,
+                                Attribute::AttrKind::NoAlias);
+      AL = AL.addParamAttribute(DT->getContext(), 0,
+                                Attribute::AttrKind::NonNull);
+    }
     AL = AL.addParamAttribute(DT->getContext(), 1,
                               Attribute::AttrKind::WriteOnly);
     AL = AL.addParamAttribute(DT->getContext(), 1,
@@ -285,7 +286,7 @@ public:
 #endif
 #endif
 #if LLVM_VERSION_MAJOR > 7
-    return B.CreateLoad(intType, alloc);
+    return B.CreateLoad(IntTy, alloc);
 #else
     return B.CreateLoad(alloc);
 #endif
@@ -6023,9 +6024,9 @@ public:
           BuilderZ.CreateStore(impialloc, d_req);
 
           if (funcName == "MPI_Isend" || funcName == "PMPI_Isend") {
-            Value *tysize =
-                MPI_TYPE_SIZE(gutils->getNewFromOriginal(call.getOperand(2)),
-                              BuilderZ, call.getType());
+            Value *tysize = MPI_TYPE_SIZE(
+                gutils->getNewFromOriginal(call.getOperand(2)), BuilderZ,
+                call.getType(), call.getFunctionType()->getParamType(2));
 
             auto len_arg = BuilderZ.CreateZExtOrTrunc(
                 gutils->getNewFromOriginal(call.getOperand(1)),
@@ -6192,7 +6193,8 @@ public:
           assert(shouldFree());
 
           assert(tysize);
-          tysize = MPI_TYPE_SIZE(tysize, Builder2, call.getType());
+          tysize = MPI_TYPE_SIZE(tysize, Builder2, call.getType(),
+                                 call.getFunctionType()->getParamType(2));
 
           Value *args[] = {/*req*/ req,
                            /*status*/ IRBuilder<>(gutils->inversionAllocs)
@@ -6825,7 +6827,8 @@ public:
             /*status*/
             IRBuilder<>(gutils->inversionAllocs).CreateAlloca(statusType)};
 
-        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType());
+        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType(),
+                                      call.getFunctionType()->getParamType(2));
 
         auto len_arg = Builder2.CreateZExtOrTrunc(
             args[1], Type::getInt64Ty(call.getContext()));
@@ -6951,7 +6954,8 @@ public:
         auto val_arg = ConstantInt::get(Type::getInt8Ty(call.getContext()), 0);
         auto len_arg = Builder2.CreateZExtOrTrunc(
             args[1], Type::getInt64Ty(call.getContext()));
-        auto tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType());
+        auto tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType(),
+                                    call.getFunctionType()->getParamType(2));
         len_arg =
             Builder2.CreateMul(len_arg,
                                Builder2.CreateZExtOrTrunc(
@@ -7061,7 +7065,8 @@ public:
         }
 
         Value *rank = MPI_COMM_RANK(comm, Builder2, root->getType());
-        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType());
+        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType(),
+                                      call.getFunctionType()->getParamType(2));
 
         auto len_arg = Builder2.CreateZExtOrTrunc(
             count, Type::getInt64Ty(call.getContext()));
@@ -7335,7 +7340,8 @@ public:
           return;
         }
 
-        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType());
+        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType(),
+                                      call.getFunctionType()->getParamType(3));
 
         // Get the length for the allocation of the intermediate buffer
         auto len_arg = Builder2.CreateZExtOrTrunc(
@@ -7619,7 +7625,8 @@ public:
               IRBuilder<> EntryBuilder(entry);
 
               auto tysize =
-                  MPI_TYPE_SIZE(MPI_FP_INT, EntryBuilder, IntTy, entry);
+                  MPI_TYPE_SIZE(MPI_FP_INT, EntryBuilder, call.getType(),
+                                call.getFunctionType()->getParamType(3), entry);
 
               // Get the length for the allocation of the intermediate buffer
               auto count_arg = EntryBuilder.CreateZExtOrTrunc(
@@ -7830,15 +7837,18 @@ public:
 
           if (forwardMode) {
 
-            Type *IntTy = call.getCalledFunction()->getArg(2)->getType();
-            auto tysize = MPI_TYPE_SIZE(datatype, Builder2,
-                                        Type::getInt64Ty(call.getContext()));
+            Type *IntTy = call.getType();
+            auto tysize =
+                MPI_TYPE_SIZE(datatype, Builder2, IntTy,
+                              call.getFunctionType()->getParamType(3));
             auto M = call.getModule();
 
             // Get the length for the allocation of the intermediate buffer
             auto byteCount = Builder2.CreateZExtOrTrunc(
                 count, Type::getInt64Ty(call.getContext()));
-            byteCount = Builder2.CreateMul(byteCount, tysize);
+            byteCount = Builder2.CreateMul(
+                byteCount, Builder2.CreateZExtOrTrunc(
+                               tysize, Type::getInt64Ty(call.getContext())));
 
             // Allocate the intermediate buffer
             auto shadow_sendbuf_tmp = CreateAllocation(
@@ -7957,15 +7967,18 @@ public:
               CreateDealloc(Builder2, recvlocbuf);
             }
           } else {
-            Type *IntTy = call.getCalledFunction()->getArg(2)->getType();
-            auto tysize = MPI_TYPE_SIZE(datatype, Builder2,
-                                        Type::getInt64Ty(call.getContext()));
+            Type *IntTy = call.getType();
+            auto tysize =
+                MPI_TYPE_SIZE(datatype, Builder2, IntTy,
+                              call.getFunctionType()->getParamType(3));
             auto M = call.getModule();
 
             // Get the length for the allocation of the intermediate buffer
             auto byteCount = Builder2.CreateZExtOrTrunc(
                 count, Type::getInt64Ty(call.getContext()));
-            byteCount = Builder2.CreateMul(byteCount, tysize);
+            byteCount = Builder2.CreateMul(
+                byteCount, Builder2.CreateZExtOrTrunc(
+                               tysize, Type::getInt64Ty(call.getContext())));
 
             // Allocate the intermediate buffer
             auto shadow_sendbuf_tmp = CreateAllocation(
@@ -8197,7 +8210,8 @@ public:
           return;
         }
 
-        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType());
+        Value *tysize = MPI_TYPE_SIZE(datatype, Builder2, call.getType(),
+                                      call.getFunctionType()->getParamType(3));
 
         // Get the length for the allocation of the intermediate buffer
         auto len_arg = Builder2.CreateZExtOrTrunc(
@@ -8333,7 +8347,8 @@ public:
           comm = lookup(comm, Builder2);
 
         Value *rank = MPI_COMM_RANK(comm, Builder2, root->getType());
-        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2, call.getType());
+        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2, call.getType(),
+                                      call.getFunctionType()->getParamType(2));
 
         if (forwardMode) {
           Value *args[] = {
@@ -8546,7 +8561,8 @@ public:
           comm = lookup(comm, Builder2);
 
         Value *rank = MPI_COMM_RANK(comm, Builder2, root->getType());
-        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2, call.getType());
+        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2, call.getType(),
+                                      call.getFunctionType()->getParamType(2));
 
         if (forwardMode) {
           Value *args[] = {
@@ -8790,7 +8806,8 @@ public:
         if (!forwardMode)
           comm = lookup(comm, Builder2);
 
-        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2, call.getType());
+        Value *tysize = MPI_TYPE_SIZE(sendtype, Builder2, call.getType(),
+                                      call.getFunctionType()->getParamType(2));
 
         if (forwardMode) {
           Value *args[] = {
@@ -9020,7 +9037,9 @@ public:
             auto n_procs =
                 B.CreateZExtOrTrunc(MPI_COMM_SIZE(comm, B, IntTy), Int64Ty);
             auto typeByteCount = B.CreateZExtOrTrunc(
-                MPI_TYPE_SIZE(datatypes, B, IntTy), Int64Ty);
+                MPI_TYPE_SIZE(datatypes, B, IntTy,
+                              call.getFunctionType()->getParamType(2)),
+                Int64Ty);
 
             Value *bufByteCount = B.CreateZExtOrTrunc(counts, Int64Ty);
             bufByteCount = B.CreateMul(bufByteCount, n_procs, "", true, true);
@@ -9068,7 +9087,8 @@ public:
               Value *blockType = B.CreateInBoundsGEP(blockTypes, idxs);
 #endif
               blockType = B.CreateLoad(IntTy, blockType);
-              auto blockTypeByteCount = MPI_TYPE_SIZE(blockType, B, IntTy);
+              auto blockTypeByteCount = MPI_TYPE_SIZE(
+                  blockType, B, IntTy, call.getFunctionType()->getParamType(3));
               auto blockByteCount = B.CreateMul(blockCount, blockTypeByteCount);
               step = B.CreateAdd(bufByteCount, blockByteCount);
             }
@@ -9083,9 +9103,11 @@ public:
             B.SetInsertPoint(endBlock);
 
             if (funcName == "MPI_Alltoallv") {
-              auto typeByteCount = MPI_TYPE_SIZE(datatypes, B, Int64Ty);
+              auto typeByteCount = MPI_TYPE_SIZE(
+                  datatypes, B, IntTy, call.getFunctionType()->getParamType(3));
               bufByteCount = B.CreateLoad(Int64Ty, bufByteCountAlloc);
-              bufByteCount = B.CreateMul(bufByteCount, typeByteCount);
+              bufByteCount = B.CreateMul(
+                  bufByteCount, B.CreateZExtOrTrunc(typeByteCount, Int64Ty));
               B.CreateStore(bufByteCount, bufByteCountAlloc);
               bufByteCount = B.CreateLoad(Int64Ty, bufByteCountAlloc);
             } else {
