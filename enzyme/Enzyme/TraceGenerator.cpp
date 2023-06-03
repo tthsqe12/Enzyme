@@ -78,7 +78,21 @@ void TraceGenerator::visitFunction(Function &F) {
       continue;
 
     auto arg = fn->arg_begin() + i;
-    auto call = tutils->InsertArgument(Builder, arg);
+    auto name = Builder.CreateGlobalStringPtr(arg->getName());
+
+    auto Outlined = [](IRBuilder<> &OutlineBuilder, TraceUtils *OutlineTutils,
+                       ArrayRef<Argument *> Arguments) {
+      auto arg = Arguments[0];
+      OutlineTutils->InsertArgument(OutlineBuilder, arg);
+      OutlineBuilder.CreateRetVoid();
+    };
+
+    Twine Name = "outline_insert_argument" +
+                 (arg->hasName() ? "_" + arg->getName() : "");
+
+    auto call = tutils->CreateOutlinedFunction(
+        Builder, Outlined, Builder.getVoidTy(), {arg, name}, false, Name);
+
 #if LLVM_VERSION_MAJOR >= 14
     call->addAttributeAtIndex(
         AttributeList::FunctionIndex,
@@ -95,8 +109,8 @@ void TraceGenerator::visitFunction(Function &F) {
     if (autodiff) {
       auto gradient_setter = ValueAsMetadata::get(
           tutils->interface->insertChoiceGradient(Builder));
-      auto gradient_setter_node = MDNode::get(
-          F.getContext(), {gradient_setter, ValueAsMetadata::get(arg)});
+      auto gradient_setter_node =
+          MDNode::get(F.getContext(), {gradient_setter});
 
       call->setMetadata("enzyme_gradient_setter", gradient_setter_node);
     }

@@ -460,3 +460,65 @@ Instruction *TraceUtils::SampleOrCondition(IRBuilder<> &Builder,
   }
   }
 }
+
+CallInst *TraceUtils::CreateOutlinedFunction(
+    IRBuilder<> &Builder,
+    function_ref<void(IRBuilder<> &, TraceUtils *, ArrayRef<Argument *>)>
+        Outlined,
+    Type *RetTy, ArrayRef<Value *> Arguments, bool needsLikelihood,
+    const Twine &Name) {
+  SmallVector<Type *, 4> Tys;
+  SmallVector<Value *, 4> Vals;
+
+  for (auto Arg : Arguments) {
+    Vals.push_back(Arg);
+    Tys.push_back(Arg->getType());
+  }
+
+  if (needsLikelihood) {
+    Vals.push_back(likelihood);
+    Tys.push_back(likelihood->getType());
+  }
+
+  Vals.push_back(trace);
+  Tys.push_back(trace->getType());
+
+  if (mode == ProbProgMode::Condition) {
+    Vals.push_back(observations);
+    Tys.push_back(observations->getType());
+  }
+
+  FunctionType *FTy = FunctionType::get(Builder.getVoidTy(), Tys, false);
+  Function *F = Function::Create(FTy, Function::LinkageTypes::InternalLinkage,
+                                 Name, Builder.GetInsertBlock()->getModule());
+  F->addFnAttr(Attribute::AlwaysInline);
+
+  auto Call = Builder.CreateCall(FTy, F, Vals);
+  auto Entry = BasicBlock::Create(Call->getContext());
+  Entry->insertInto(F);
+
+  SmallVector<Argument *, 4> Rets;
+  for (auto &&Ret :
+       make_range(F->arg_begin(), F->arg_begin() + Arguments.size())) {
+    Rets.push_back(&Ret);
+  }
+
+  auto idx = F->arg_begin() + Arguments.size();
+
+  Argument *likelihood_arg = nullptr;
+  if (needsLikelihood)
+    likelihood_arg = idx++;
+
+  Argument *trace_arg = idx++;
+
+  Argument *observations_arg = nullptr;
+  if (mode == ProbProgMode::Condition)
+    observations_arg = idx++;
+
+  TraceUtils OutlineTutils = TraceUtils(mode, F, trace_arg, observations_arg,
+                                        likelihood_arg, interface);
+  IRBuilder<> OutlineBuilder(Entry);
+  Outlined(OutlineBuilder, &OutlineTutils, Rets);
+
+  return Call;
+}

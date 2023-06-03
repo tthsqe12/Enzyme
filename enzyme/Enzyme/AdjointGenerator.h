@@ -12316,21 +12316,23 @@ public:
       IRBuilder<> Builder2(&call);
       getReverseBuilder(Builder2);
 
-      auto trace = call.getArgOperand(0);
+      auto arg = call.getArgOperand(0);
       auto name = call.getArgOperand(1);
+      auto trace = call.getArgOperand(2);
 
       auto gradient_setter = cast<Function>(
           cast<ValueAsMetadata>(
               call.getMetadata("enzyme_gradient_setter")->getOperand(0).get())
               ->getValue());
-      auto arg = cast<Function>(
-          cast<ValueAsMetadata>(
-              call.getMetadata("enzyme_gradient_setter")->getOperand(1).get())
-              ->getValue());
 
       auto dtrace = lookup(gutils->getNewFromOriginal(trace), Builder2);
       auto dname = lookup(gutils->getNewFromOriginal(name), Builder2);
-      auto darg = diffe(arg, Builder2);
+      Value *darg;
+      if (arg->getType()->isPointerTy()) {
+        darg = gutils->invertPointerM(arg, Builder2);
+      } else {
+        darg = diffe(arg, Builder2);
+      }
 
       TraceUtils::InsertArgumentGradient(Builder2,
                                          gradient_setter->getFunctionType(),

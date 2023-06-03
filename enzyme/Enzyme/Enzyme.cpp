@@ -1047,9 +1047,9 @@ public:
     }
 
     return Optional<Options>(
-        {differet, tape, dynamic_interface, trace, observations, likelihood, diffeLikelihood, width,
-         allocatedTapeSize, freeMemory, returnUsed, tapeIsPointer,
-         differentialReturn, diffeTrace, retType, primalReturn});
+        {differet, tape, dynamic_interface, trace, observations, likelihood,
+         diffeLikelihood, width, allocatedTapeSize, freeMemory, returnUsed,
+         tapeIsPointer, differentialReturn, diffeTrace, retType, primalReturn});
   }
 
   static FnTypeInfo
@@ -1690,20 +1690,20 @@ public:
     Function *F = parseFunctionParameter(CI);
     if (!F)
       return false;
-    
+
     assert(F);
-    
+
     std::vector<DIFFE_TYPE> constants;
     std::map<int, Type *> byVal;
     SmallVector<Value *, 4> args;
-    
+
     auto diffeMode = DerivativeMode::ReverseModeCombined;
-    
+
     auto opt = handleArguments(Builder, CI, F, diffeMode, false, constants,
                                args, byVal);
-    
+
     SmallVector<Value *, 6> dargs = SmallVector(args);
-    
+
 #if LLVM_VERSION_MAJOR >= 16
     if (!opt.has_value())
       return false;
@@ -1711,27 +1711,27 @@ public:
     if (!opt.hasValue())
       return false;
 #endif
-    
+
     auto dynamic_interface = opt->dynamic_interface;
     auto trace = opt->trace;
     auto dtrace = opt->diffeTrace;
     auto observations = opt->observations;
     auto likelihood = opt->likelihood;
     auto dlikelihood = opt->diffeLikelihood;
-    
+
     // Interface
     bool has_dynamic_interface = dynamic_interface != nullptr;
     TraceInterface *interface;
     if (has_dynamic_interface) {
       interface =
-      new DynamicTraceInterface(dynamic_interface, CI->getFunction());
+          new DynamicTraceInterface(dynamic_interface, CI->getFunction());
     } else {
       interface = new StaticTraceInterface(F->getParent());
     }
-    
+
     bool autodiff = dtrace;
     IRBuilder<> AllocaBuilder(CI->getParent()->getFirstNonPHI());
-    
+
     if (!likelihood) {
       likelihood = AllocaBuilder.CreateAlloca(AllocaBuilder.getDoubleTy(),
                                               nullptr, "likelihood");
@@ -1739,10 +1739,12 @@ public:
                           likelihood);
       args.push_back(likelihood);
     }
-    
+
     if (autodiff && !dlikelihood) {
-      dlikelihood = AllocaBuilder.CreateAlloca(AllocaBuilder.getDoubleTy(), nullptr, "dlikelihood");
-      Builder.CreateStore(ConstantFP::get(Builder.getDoubleTy(), 1.0), dlikelihood);
+      dlikelihood = AllocaBuilder.CreateAlloca(AllocaBuilder.getDoubleTy(),
+                                               nullptr, "dlikelihood");
+      Builder.CreateStore(ConstantFP::get(Builder.getDoubleTy(), 1.0),
+                          dlikelihood);
     }
 
     if (autodiff) {

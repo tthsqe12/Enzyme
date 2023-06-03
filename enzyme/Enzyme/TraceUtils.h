@@ -150,6 +150,14 @@ public:
                     llvm::ArrayRef<llvm::Value *> sample_args,
                     llvm::Value *trace, llvm::Value *observations,
                     llvm::Value *address, const llvm::Twine &Name = "");
+
+  llvm::CallInst *CreateOutlinedFunction(
+      llvm::IRBuilder<> &Builder,
+      llvm::function_ref<void(llvm::IRBuilder<> &, TraceUtils *,
+                              llvm::ArrayRef<llvm::Argument *>)>
+          Outlined,
+      llvm::Type *RetTy, llvm::ArrayRef<llvm::Value *> Arguments,
+      bool needsLikelihood = true, const llvm::Twine &Name = "");
 };
 
 #endif /* TraceUtils_h */
