@@ -598,6 +598,8 @@ public:
     Value *dynamic_interface;
     Value *trace;
     Value *observations;
+    Value *likelihood;
+    Value *diffeLikelihood;
     unsigned width;
     int allocatedTapeSize;
     bool freeMemory;
@@ -622,6 +624,8 @@ public:
     Value *dynamic_interface = nullptr;
     Value *trace = nullptr;
     Value *observations = nullptr;
+    Value *likelihood = nullptr;
+    Value *diffeLikelihood = nullptr;
     unsigned width = 1;
     int allocatedTapeSize = -1;
     bool freeMemory = true;
@@ -818,6 +822,15 @@ public:
           trace = CI->getArgOperand(++i);
           diffeTrace = true;
           opt_ty = DIFFE_TYPE::CONSTANT;
+          continue;
+        } else if (*metaString == "enzyme_likelihood") {
+          likelihood = CI->getArgOperand(++i);
+          opt_ty = DIFFE_TYPE::CONSTANT;
+          continue;
+        } else if (*metaString == "enzyme_duplikelihood") {
+          likelihood = CI->getArgOperand(++i);
+          diffeLikelihood = CI->getArgOperand(++i);
+          opt_ty = DIFFE_TYPE::DUP_ARG;
           continue;
         } else if (*metaString == "enzyme_observations") {
           observations = CI->getArgOperand(++i);
@@ -1034,7 +1047,7 @@ public:
     }
 
     return Optional<Options>(
-        {differet, tape, dynamic_interface, trace, observations, width,
+        {differet, tape, dynamic_interface, trace, observations, likelihood, diffeLikelihood, width,
          allocatedTapeSize, freeMemory, returnUsed, tapeIsPointer,
          differentialReturn, diffeTrace, retType, primalReturn});
   }
@@ -1677,20 +1690,20 @@ public:
     Function *F = parseFunctionParameter(CI);
     if (!F)
       return false;
-
+    
     assert(F);
-
+    
     std::vector<DIFFE_TYPE> constants;
     std::map<int, Type *> byVal;
     SmallVector<Value *, 4> args;
-
+    
     auto diffeMode = DerivativeMode::ReverseModeCombined;
-
+    
     auto opt = handleArguments(Builder, CI, F, diffeMode, false, constants,
                                args, byVal);
-
+    
     SmallVector<Value *, 6> dargs = SmallVector(args);
-
+    
 #if LLVM_VERSION_MAJOR >= 16
     if (!opt.has_value())
       return false;
@@ -1698,37 +1711,41 @@ public:
     if (!opt.hasValue())
       return false;
 #endif
-
+    
     auto dynamic_interface = opt->dynamic_interface;
     auto trace = opt->trace;
     auto dtrace = opt->diffeTrace;
     auto observations = opt->observations;
-
+    auto likelihood = opt->likelihood;
+    auto dlikelihood = opt->diffeLikelihood;
+    
     // Interface
     bool has_dynamic_interface = dynamic_interface != nullptr;
     TraceInterface *interface;
     if (has_dynamic_interface) {
       interface =
-          new DynamicTraceInterface(dynamic_interface, CI->getFunction());
+      new DynamicTraceInterface(dynamic_interface, CI->getFunction());
     } else {
       interface = new StaticTraceInterface(F->getParent());
     }
-
+    
     bool autodiff = dtrace;
-
     IRBuilder<> AllocaBuilder(CI->getParent()->getFirstNonPHI());
-
-    auto likelihood = AllocaBuilder.CreateAlloca(AllocaBuilder.getDoubleTy(),
-                                                 nullptr, "likelihood");
-    Builder.CreateStore(ConstantFP::getNullValue(Builder.getDoubleTy()),
-                        likelihood);
-    args.push_back(likelihood);
+    
+    if (!likelihood) {
+      likelihood = AllocaBuilder.CreateAlloca(AllocaBuilder.getDoubleTy(),
+                                              nullptr, "likelihood");
+      Builder.CreateStore(ConstantFP::getNullValue(Builder.getDoubleTy()),
+                          likelihood);
+      args.push_back(likelihood);
+    }
+    
+    if (autodiff && !dlikelihood) {
+      dlikelihood = AllocaBuilder.CreateAlloca(AllocaBuilder.getDoubleTy(), nullptr, "dlikelihood");
+      Builder.CreateStore(ConstantFP::get(Builder.getDoubleTy(), 1.0), dlikelihood);
+    }
 
     if (autodiff) {
-      auto dlikelihood = AllocaBuilder.CreateAlloca(AllocaBuilder.getDoubleTy(),
-                                                    nullptr, "dlikelihood");
-      Builder.CreateStore(ConstantFP::get(Builder.getDoubleTy(), 1.0),
-                          dlikelihood);
       dargs.push_back(likelihood);
       dargs.push_back(dlikelihood);
       constants.push_back(DIFFE_TYPE::DUP_ARG);
