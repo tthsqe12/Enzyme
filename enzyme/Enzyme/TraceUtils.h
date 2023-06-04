@@ -101,7 +101,7 @@ public:
   llvm::CallInst *InsertCall(llvm::IRBuilder<> &Builder, llvm::Value *address,
                              llvm::Value *subtrace);
 
-  llvm::CallInst *InsertArgument(llvm::IRBuilder<> &Builder,
+  llvm::CallInst *InsertArgument(llvm::IRBuilder<> &Builder, llvm::Value *name,
                                  llvm::Argument *argument);
 
   llvm::CallInst *InsertReturn(llvm::IRBuilder<> &Builder, llvm::Value *ret);
@@ -148,7 +148,6 @@ public:
   llvm::Instruction *
   SampleOrCondition(llvm::IRBuilder<> &Builder, llvm::Function *sample_fn,
                     llvm::ArrayRef<llvm::Value *> sample_args,
-                    llvm::Value *trace, llvm::Value *observations,
                     llvm::Value *address, const llvm::Twine &Name = "");
 
   llvm::CallInst *CreateOutlinedFunction(

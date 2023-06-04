@@ -249,14 +249,13 @@ CallInst *TraceUtils::InsertCall(IRBuilder<> &Builder, Value *address,
   return call;
 }
 
-CallInst *TraceUtils::InsertArgument(IRBuilder<> &Builder, Argument *argument) {
+CallInst *TraceUtils::InsertArgument(IRBuilder<> &Builder, Value *name,
+                                     Argument *argument) {
   Type *size_type = interface->insertArgumentTy()->getParamType(3);
   auto &&[retval, sizeval] =
       ValueToVoidPtrAndSize(Builder, argument, size_type);
 
-  auto Name = Builder.CreateGlobalStringPtr(argument->getName());
-
-  Value *args[] = {trace, Name, retval, sizeval};
+  Value *args[] = {trace, name, retval, sizeval};
 
   auto call = Builder.CreateCall(interface->insertArgumentTy(),
                                  interface->insertArgument(Builder), args);
@@ -411,7 +410,6 @@ Instruction *TraceUtils::HasCall(IRBuilder<> &Builder, Value *address,
 Instruction *TraceUtils::SampleOrCondition(IRBuilder<> &Builder,
                                            Function *sample_fn,
                                            ArrayRef<Value *> sample_args,
-                                           Value *trace, Value *observations,
                                            Value *address, const Twine &Name) {
   auto &Context = Builder.getContext();
   auto parrent_fn = Builder.GetInsertBlock()->getParent();
@@ -420,7 +418,6 @@ Instruction *TraceUtils::SampleOrCondition(IRBuilder<> &Builder,
   case ProbProgMode::Trace: {
     auto sample_call = Builder.CreateCall(sample_fn->getFunctionType(),
                                           sample_fn, sample_args);
-
     return sample_call;
   }
   case ProbProgMode::Condition: {
@@ -441,9 +438,9 @@ Instruction *TraceUtils::SampleOrCondition(IRBuilder<> &Builder,
 
     Builder.CreateCondBr(hasChoice, ThenBlock, ElseBlock);
     Builder.SetInsertPoint(ThenBlock);
-    ThenChoice = TraceUtils::GetChoice(Builder, interface->getChoiceTy(),
-                                       interface->getChoice(Builder), address,
-                                       sample_fn->getReturnType(), trace, Name);
+    ThenChoice = GetChoice(Builder, interface->getChoiceTy(),
+                           interface->getChoice(Builder), address,
+                           sample_fn->getReturnType(), trace, Name);
     Builder.CreateBr(EndBlock);
 
     Builder.SetInsertPoint(ElseBlock);
@@ -480,15 +477,15 @@ CallInst *TraceUtils::CreateOutlinedFunction(
     Tys.push_back(likelihood->getType());
   }
 
-  Vals.push_back(trace);
-  Tys.push_back(trace->getType());
-
   if (mode == ProbProgMode::Condition) {
     Vals.push_back(observations);
     Tys.push_back(observations->getType());
   }
 
-  FunctionType *FTy = FunctionType::get(Builder.getVoidTy(), Tys, false);
+  Vals.push_back(trace);
+  Tys.push_back(trace->getType());
+
+  FunctionType *FTy = FunctionType::get(RetTy, Tys, false);
   Function *F = Function::Create(FTy, Function::LinkageTypes::InternalLinkage,
                                  Name, Builder.GetInsertBlock()->getModule());
   F->addFnAttr(Attribute::AlwaysInline);
@@ -497,11 +494,9 @@ CallInst *TraceUtils::CreateOutlinedFunction(
   auto Entry = BasicBlock::Create(Call->getContext());
   Entry->insertInto(F);
 
-  SmallVector<Argument *, 4> Rets;
-  for (auto &&Ret :
-       make_range(F->arg_begin(), F->arg_begin() + Arguments.size())) {
-    Rets.push_back(&Ret);
-  }
+  auto ArgRange = make_pointer_range(
+      make_range(F->arg_begin(), F->arg_begin() + Arguments.size()));
+  SmallVector<Argument *, 4> Rets(ArgRange);
 
   auto idx = F->arg_begin() + Arguments.size();
 
@@ -509,11 +504,11 @@ CallInst *TraceUtils::CreateOutlinedFunction(
   if (needsLikelihood)
     likelihood_arg = idx++;
 
-  Argument *trace_arg = idx++;
-
   Argument *observations_arg = nullptr;
   if (mode == ProbProgMode::Condition)
     observations_arg = idx++;
+
+  Argument *trace_arg = idx++;
 
   TraceUtils OutlineTutils = TraceUtils(mode, F, trace_arg, observations_arg,
                                         likelihood_arg, interface);

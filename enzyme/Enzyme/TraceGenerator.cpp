@@ -82,8 +82,7 @@ void TraceGenerator::visitFunction(Function &F) {
 
     auto Outlined = [](IRBuilder<> &OutlineBuilder, TraceUtils *OutlineTutils,
                        ArrayRef<Argument *> Arguments) {
-      auto arg = Arguments[0];
-      OutlineTutils->InsertArgument(OutlineBuilder, arg);
+      OutlineTutils->InsertArgument(OutlineBuilder, Arguments[0], Arguments[1]);
       OutlineBuilder.CreateRetVoid();
     };
 
@@ -91,7 +90,7 @@ void TraceGenerator::visitFunction(Function &F) {
                  (arg->hasName() ? "_" + arg->getName() : "");
 
     auto call = tutils->CreateOutlinedFunction(
-        Builder, Outlined, Builder.getVoidTy(), {arg, name}, false, Name);
+        Builder, Outlined, Builder.getVoidTy(), {name, arg}, false, Name);
 
 #if LLVM_VERSION_MAJOR >= 14
     call->addAttributeAtIndex(
@@ -119,74 +118,35 @@ void TraceGenerator::visitFunction(Function &F) {
 
 void TraceGenerator::handleSampleCall(CallInst &call, CallInst *new_call) {
   // create outlined sample function
-  SmallVector<Value *, 4> Args;
-  SmallVector<Type *, 4> Tys;
-  for (auto &arg : make_range(new_call->arg_begin() + 2, new_call->arg_end())) {
-    Args.push_back(arg);
-    Tys.push_back(arg->getType());
-  }
+  SmallVector<Value *, 4> Args(
+      make_range(new_call->arg_begin() + 2, new_call->arg_end()));
 
-  auto orig_FTy = FunctionType::get(call.getType(), Tys, false);
-
-  Type *traceType =
-      TraceInterface::getTraceTy(call.getContext())->getReturnType();
-
-  SmallVector<Type *, 4> params;
-
-  for (unsigned i = 0; i < orig_FTy->getNumParams(); ++i) {
-    params.push_back(orig_FTy->getParamType(i));
-  }
-
-  if (mode == ProbProgMode::Condition)
-    params.push_back(traceType);
-
-  params.push_back(traceType);
-
-  Type *RetTy = orig_FTy->getReturnType();
-  FunctionType *FTy = FunctionType::get(RetTy, params, orig_FTy->isVarArg());
-
-  std::string name_prefix =
-      mode == ProbProgMode::Condition ? "condition_" : "sample_";
-  if (call.hasName())
-    name_prefix += call.getName();
-
-  Function *outlinedSample =
-      Function::Create(FTy, Function::LinkageTypes::InternalLinkage,
-                       name_prefix, call.getModule());
-  BasicBlock *entry = BasicBlock::Create(call.getContext());
-  entry->insertInto(outlinedSample);
-
-  Argument *trace = nullptr;
-  Argument *observations = nullptr;
-
-  auto arg = outlinedSample->arg_end() - 1;
-  trace = arg;
-  arg->setName("trace");
-  arg->addAttr(
-      Attribute::get(call.getContext(), TraceUtils::TraceParameterAttribute));
-
-  if (mode == ProbProgMode::Condition) {
-    auto arg = outlinedSample->arg_end() - 2;
-    observations = arg;
-    arg->setName("observations");
-    arg->addAttr(Attribute::get(call.getContext(),
-                                TraceUtils::ObservationsParameterAttribute));
-  }
+  Twine name_prefix =
+      (mode == ProbProgMode::Condition ? "condition" : "sample") +
+      (call.hasName() ? "_" + call.getName() : "");
 
   Function *samplefn = GetFunctionFromValue(new_call->getArgOperand(0));
   Function *likelihoodfn = GetFunctionFromValue(new_call->getArgOperand(1));
 
   IRBuilder<> Builder(new_call);
-  // call outlined sample function
 
-  if (mode == ProbProgMode::Condition)
-    Args.push_back(tutils->getObservations());
+  auto OutlinedSample = [Name = call.getName(),
+                         samplefn](IRBuilder<> &OutlineBuilder,
+                                   TraceUtils *OutlineTutils,
+                                   ArrayRef<Argument *> Arguments) {
+    SmallVector<Value *, 2> SampleArgs(
+        make_range(Arguments.begin() + 1, Arguments.end()));
 
-  Args.push_back(tutils->getTrace());
+    auto choice = OutlineTutils->SampleOrCondition(
+        OutlineBuilder, samplefn, SampleArgs, Arguments[0], Name);
+    OutlineBuilder.CreateRet(choice);
+  };
 
-  outlinedSample->addFnAttr(Attribute::AlwaysInline);
-  auto sample_call = Builder.CreateCall(outlinedSample->getFunctionType(),
-                                        outlinedSample, Args);
+  auto sample_call = tutils->CreateOutlinedFunction(
+      Builder, OutlinedSample,
+      tutils->getTraceInterface()->insertChoiceTy()->getParamType(2), Args,
+      false, name_prefix);
+
 #if LLVM_VERSION_MAJOR >= 14
   sample_call->addAttributeAtIndex(
       AttributeList::FunctionIndex,
@@ -210,35 +170,15 @@ void TraceGenerator::handleSampleCall(CallInst &call, CallInst *new_call) {
     sample_call->setMetadata("enzyme_gradient_setter", gradient_setter_node);
   }
 
-  // build outlined sample function
-
-  IRBuilder<> OutlineBuilder(&outlinedSample->getEntryBlock());
-
-  Value *address = outlinedSample->arg_begin();
-
-  SmallVector<Value *, 2> sample_args;
-  for (unsigned i = 1; i <= samplefn->getFunctionType()->getNumParams(); ++i) {
-    sample_args.push_back(outlinedSample->arg_begin() + i);
-  }
-
-  auto choice =
-      tutils->SampleOrCondition(OutlineBuilder, samplefn, sample_args, trace,
-                                observations, address, call.getName());
-
-  OutlineBuilder.CreateRet(choice);
-
   // calculate and accumulate log likelihood
 
-  unsigned offset = mode == ProbProgMode::Condition ? 2 : 1;
+  SmallVector<Value *, 3> LikelihoodArgs(
+      make_range(Args.begin() + 1, Args.end()));
+  LikelihoodArgs.push_back(sample_call);
 
-  SmallVector<Value *, 3> likelihood_args;
-  for (auto &&arg : make_range(Args.begin() + 1, Args.end() - offset)) {
-    likelihood_args.push_back(arg);
-  }
-  likelihood_args.push_back(sample_call);
   auto score =
       Builder.CreateCall(likelihoodfn->getFunctionType(), likelihoodfn,
-                         likelihood_args, "likelihood." + call.getName());
+                         LikelihoodArgs, "likelihood." + call.getName());
 
   auto log_prob_sum = Builder.CreateLoad(
       Builder.getDoubleTy(), tutils->getLikelihood(), "log_prob_sum");
@@ -246,27 +186,19 @@ void TraceGenerator::handleSampleCall(CallInst &call, CallInst *new_call) {
   Builder.CreateStore(acc, tutils->getLikelihood());
 
   // create outlined trace function
-  Type *trace_params[] = {trace->getType(), address->getType(),
-                          score->getType(), choice->getType()};
-  auto trace_FTy = FunctionType::get(Type::getVoidTy(call.getContext()),
-                                     trace_params, false);
 
-  Function *outlinedTrace =
-      Function::Create(trace_FTy, Function::LinkageTypes::InternalLinkage,
-                       "trace_" + call.getName(), call.getModule());
-  BasicBlock *trace_entry = BasicBlock::Create(call.getContext());
-  trace_entry->insertInto(outlinedTrace);
+  Value *trace_args[] = {new_call->getArgOperand(2), score, sample_call};
 
-  // call outlined trace function
+  auto OutlinedTrace = [](IRBuilder<> &OutlineBuilder,
+                          TraceUtils *OutlineTutils,
+                          ArrayRef<Argument *> Arguments) {
+    OutlineTutils->InsertChoice(OutlineBuilder, Arguments[0], Arguments[1],
+                                Arguments[2]);
+    OutlineBuilder.CreateRetVoid();
+  };
 
-  Value *trace_args[] = {tutils->getTrace(), new_call->getArgOperand(2), score,
-                         sample_call};
-
-  outlinedTrace->addFnAttr(Attribute::AlwaysInline);
-  outlinedTrace->addFnAttr("enzyme_notypeanalysis");
-  outlinedTrace->addFnAttr("enzyme_inactive");
-  auto trace_call = Builder.CreateCall(outlinedTrace->getFunctionType(),
-                                       outlinedTrace, trace_args);
+  auto trace_call = tutils->CreateOutlinedFunction(
+      Builder, OutlinedTrace, Builder.getVoidTy(), trace_args, false);
 
 #if LLVM_VERSION_MAJOR >= 14
   trace_call->addAttributeAtIndex(
@@ -283,19 +215,6 @@ void TraceGenerator::handleSampleCall(CallInst &call, CallInst *new_call) {
       AttributeList::FunctionIndex,
       Attribute::get(call.getContext(), "enzyme_notypeanalysis"));
 #endif
-
-  // build outlined trace function
-
-  IRBuilder<> TraceBuilder(trace_entry);
-  trace_entry->setName("entry");
-
-  TraceUtils::InsertChoice(
-      TraceBuilder, tutils->getTraceInterface()->insertChoiceTy(),
-      tutils->getTraceInterface()->insertChoice(TraceBuilder),
-      outlinedTrace->arg_begin() + 1, outlinedTrace->arg_begin() + 2,
-      outlinedTrace->arg_begin() + 3, outlinedTrace->arg_begin() + 0);
-
-  TraceBuilder.CreateRetVoid();
 
   sample_call->takeName(new_call);
   new_call->replaceAllUsesWith(sample_call);
