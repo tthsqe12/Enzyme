@@ -93,7 +93,7 @@ entry:
 ; CHECK-NEXT:   %2 = phi double [ %from.trace.mu.i, %condition.mu.with.trace.i ], [ %sample.mu.i, %condition.mu.without.trace.i ]
 ; CHECK-NEXT:   %3 = bitcast double* %mu.ptr.i to i8*
 ; CHECK-NEXT:   call void @llvm.lifetime.end.p0i8(i64 8, i8* %3)
-; CHECK-NEXT:   %likelihood.mu = call fast double @augmented_normal_logpdf.3(double 0.000000e+00, double 1.000000e+00, double %2)
+; CHECK-NEXT:   %likelihood.mu = call fast double @augmented_normal_logpdf.1(double 0.000000e+00, double 1.000000e+00, double %2)
 ; CHECK-NEXT:   %log_prob_sum = load double, double* %likelihood
 ; CHECK-NEXT:   %4 = fadd double %log_prob_sum, %likelihood.mu
 ; CHECK-NEXT:   store double %4, double* %likelihood
@@ -107,7 +107,7 @@ entry:
 
 ; CHECK: condition.x.with.trace.i:                         ; preds = %condition_mu.exit
 ; CHECK-NEXT:   %8 = bitcast double* %x.ptr.i to i8*
-; CHECK-NEXT:   %x.size.i = call i64 @__enzyme_get_choice(i8* %trace, i8* nocapture readonly getelementptr inbounds ([2 x i8], [2 x i8]* @.str.1, i64 0, i64 0), i8* %8, i64 8)
+; CHECK-NEXT:   %x.size.i = call i64 @__enzyme_get_choice(i8* %trace, i8* nocapture readonly getelementptr inbounds ([2 x i8], [2 x i8]* @.str.1, i64 0, i64 0), i8* %8, i64 8) #7
 ; CHECK-NEXT:   %from.trace.x.i = load double, double* %x.ptr.i
 ; CHECK-NEXT:   br label %condition_x.exit
 
@@ -133,7 +133,7 @@ entry:
 ; CHECK-NEXT:   store double 0.000000e+00, double* %"likelihood'"
 ; CHECK-NEXT:   %15 = load double, double* %"likelihood'"
 ; CHECK-NEXT:   %16 = fadd fast double %15, %14
-; CHECK-NEXT:   store double %16, double* %"likelihood'
+; CHECK-NEXT:   store double %16, double* %"likelihood'"
 ; CHECK-NEXT:   %17 = call { double, double } @diffenormal_logpdf(double %2, double 1.000000e+00, double %9, double %14)
 ; CHECK-NEXT:   %18 = extractvalue { double, double } %17, 0
 ; CHECK-NEXT:   %19 = extractvalue { double, double } %17, 1
@@ -145,7 +145,7 @@ entry:
 ; CHECK-NEXT:   %23 = load double, double* %"likelihood'"
 ; CHECK-NEXT:   %24 = fadd fast double %23, %22
 ; CHECK-NEXT:   store double %24, double* %"likelihood'"
-; CHECK-NEXT:   %25 = call { double } @diffenormal_logpdf.4(double 0.000000e+00, double 1.000000e+00, double %2, double %22)
+; CHECK-NEXT:   %25 = call { double } @diffenormal_logpdf.2(double 0.000000e+00, double 1.000000e+00, double %2, double %22)
 ; CHECK-NEXT:   %26 = extractvalue { double } %25, 0
 ; CHECK-NEXT:   %27 = fadd fast double %18, %26
 ; CHECK-NEXT:   %28 = bitcast double %27 to i64
