@@ -9214,7 +9214,9 @@ public:
 
     // Remove free's in forward pass so the comm can be used in the reverse
     // pass
-    if (funcName == "MPI_Comm_free" || funcName == "MPI_Comm_disconnect") {
+    if (funcName == "MPI_Comm_free" || funcName == "MPI_Comm_disconnect" ||
+        funcName == "MPI_Group_free" || funcName == "MPI_Info_free" ||
+        funcName == "MPI_Type_free") {
       eraseIfUnused(call, /*erase*/ true, /*check*/ false);
       return;
     }
@@ -9222,8 +9224,8 @@ public:
     // Adjoint of MPI_Comm_split / MPI_Graph_create (which allocates a comm in a
     // pointer) is to free the created comm at the corresponding place in the
     // reverse pass
-    auto commFound = MPIInactiveCommAllocators.find(funcName.str());
-    if (commFound != MPIInactiveCommAllocators.end()) {
+    auto commFound = MPIInactiveAllocators.find(funcName.str());
+    if (commFound != MPIInactiveAllocators.end()) {
       if (Mode == DerivativeMode::ReverseModeGradient ||
           Mode == DerivativeMode::ReverseModeCombined) {
         IRBuilder<> Builder2(call.getParent());
@@ -9233,9 +9235,23 @@ public:
         Type *types[] = {args[0]->getType()};
 
         FunctionType *FT = FunctionType::get(call.getType(), types, false);
+        std::string freeName;
+        StringRef allocName{commFound->first};
+        if (allocName.startswith("MPI_Comm") ||
+            allocName.startswith("MPI_Graph") ||
+            allocName.startswith("MPI_Intercomm")) {
+          freeName = "MPI_Comm_free";
+        } else if (allocName.startswith("MPI_Group")) {
+          freeName = "MPI_Group_free";
+        } else if (allocName.startswith("MPI_Type")) {
+          freeName = "MPI_Info_free";
+        } else if (allocName.startswith("MPI_Info")) {
+          freeName = "MPI_Type_free";
+        } else {
+          assert(false && "Unhandled MPI allocator");
+        }
         Builder2.CreateCall(
-            called->getParent()->getOrInsertFunction("MPI_Comm_free", FT),
-            args);
+            called->getParent()->getOrInsertFunction(freeName, FT), args);
       }
       if (Mode == DerivativeMode::ReverseModeGradient)
         eraseIfUnused(call, /*erase*/ true, /*check*/ false);
@@ -10803,9 +10819,11 @@ public:
 
     if ((funcName.startswith("MPI_") || funcName.startswith("PMPI_")) &&
         (!gutils->isConstantInstruction(&call) || funcName == "MPI_Barrier" ||
-         funcName == "MPI_Comm_free" || funcName == "MPI_Comm_disconnect" ||
-         MPIInactiveCommAllocators.find(funcName.str()) !=
-             MPIInactiveCommAllocators.end())) {
+         funcName == "MPI_Group_free" || funcName == "MPI_Info_free" ||
+         funcName == "MPI_Type_free" || funcName == "MPI_Comm_free" ||
+         funcName == "MPI_Comm_disconnect" ||
+         MPIInactiveAllocators.find(funcName.str()) !=
+             MPIInactiveAllocators.end())) {
       handleMPI(call, called, funcName);
       return;
     }

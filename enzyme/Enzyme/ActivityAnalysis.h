@@ -64,7 +64,7 @@ class PreProcessCache;
 
 // A map of MPI comm allocators (otherwise inactive) to the
 // argument of the Comm* they allocate into.
-extern const std::map<std::string, size_t> MPIInactiveCommAllocators;
+extern const std::map<std::string, size_t> MPIInactiveAllocators;
 
 /// Helper class to analyze the differential activity
 class ActivityAnalyzer {
