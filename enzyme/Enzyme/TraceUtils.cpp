@@ -458,14 +458,18 @@ Instruction *TraceUtils::SampleOrCondition(IRBuilder<> &Builder,
   }
 }
 
+std::map<std::pair<StringRef, FunctionType *>, Function *>
+    cachedOutlinedFunctions;
+
 CallInst *TraceUtils::CreateOutlinedFunction(
     IRBuilder<> &Builder,
     function_ref<void(IRBuilder<> &, TraceUtils *, ArrayRef<Argument *>)>
         Outlined,
     Type *RetTy, ArrayRef<Value *> Arguments, bool needsLikelihood,
-    const Twine &Name) {
+    StringRef Name) {
   SmallVector<Type *, 4> Tys;
   SmallVector<Value *, 4> Vals;
+  Module *M = Builder.GetInsertBlock()->getModule();
 
   for (auto Arg : Arguments) {
     Vals.push_back(Arg);
@@ -486,12 +490,18 @@ CallInst *TraceUtils::CreateOutlinedFunction(
   Tys.push_back(trace->getType());
 
   FunctionType *FTy = FunctionType::get(RetTy, Tys, false);
-  Function *F = Function::Create(FTy, Function::LinkageTypes::InternalLinkage,
-                                 Name, Builder.GetInsertBlock()->getModule());
+
+  auto found = cachedOutlinedFunctions.find({Name, FTy});
+  if (found != cachedOutlinedFunctions.end()) {
+    Function *F = found->second;
+    return Builder.CreateCall(FTy, F, Vals);
+  }
+
+  Function *F =
+      Function::Create(FTy, Function::LinkageTypes::InternalLinkage, Name, M);
   F->addFnAttr(Attribute::AlwaysInline);
 
-  auto Call = Builder.CreateCall(FTy, F, Vals);
-  auto Entry = BasicBlock::Create(Call->getContext());
+  auto Entry = BasicBlock::Create(M->getContext());
   Entry->insertInto(F);
 
   auto ArgRange = make_pointer_range(
@@ -515,5 +525,7 @@ CallInst *TraceUtils::CreateOutlinedFunction(
   IRBuilder<> OutlineBuilder(Entry);
   Outlined(OutlineBuilder, &OutlineTutils, Rets);
 
-  return Call;
+  cachedOutlinedFunctions[{Name, FTy}] = F;
+
+  return Builder.CreateCall(FTy, F, Vals);
 }

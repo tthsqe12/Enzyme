@@ -94,33 +94,29 @@ entry:
 
 ; CHECK: define internal double @trace_loss(double* %data, i32 %n, double* "enzyme_likelihood" %likelihood, i8* "enzyme_trace" %trace)
 ; CHECK-NEXT: entry:
-; CHECK-NEXT:   %insert_function = load void (i8*, i8*)*, void (i8*, i8*)** @insert_function
-; CHECK-NEXT:   call void %insert_function(i8* %trace, i8* bitcast (double (double*, i32, double*, i8*)* @trace_loss to i8*))
-; CHECK-NEXT:   %0 = bitcast double* %data to i8*
-; CHECK-NEXT:   %insert_argument.i = load void (i8*, i8*, i8*, i64)*, void (i8*, i8*, i8*, i64)** @insert_argument
-; CHECK-NEXT:   call void %insert_argument.i(i8* %trace, i8* nocapture readonly getelementptr inbounds ([5 x i8], [5 x i8]* @0, i32 0, i32 0), i8* %0, i64 0)
-; CHECK-NEXT:   %1 = zext i32 %n to i64
-; CHECK-NEXT:   %2 = inttoptr i64 %1 to i8*
-; CHECK-NEXT:   %insert_argument.i3 = load void (i8*, i8*, i8*, i64)*, void (i8*, i8*, i8*, i64)** @insert_argument
-; CHECK-NEXT:   call void %insert_argument.i3(i8* %trace, i8* nocapture readonly getelementptr inbounds ([2 x i8], [2 x i8]* @1, i32 0, i32 0), i8* %2, i64 4)
-; CHECK-NEXT:   %3 = call double @normal(double 0.000000e+00, double 1.000000e+00)
-; CHECK-NEXT:   %likelihood.call = call double @normal_logpdf(double 0.000000e+00, double 1.000000e+00, double %3)
+; CHECK-NEXT:   %0 = load void (i8*, i8*)*, void (i8*, i8*)** @insert_function_ptr
+; CHECK-NEXT:   call void %0(i8* %trace, i8* bitcast (double (double*, i32, double*, i8*)* @trace_loss to i8*))
+; CHECK-NEXT:   %1 = bitcast double* %data to i8*
+; CHECK-NEXT:   call void @insert_argument(i8* %trace, i8* nocapture readonly getelementptr inbounds ([5 x i8], [5 x i8]* @0, i32 0, i32 0), i8* %1, i64 0)
+; CHECK-NEXT:   %2 = zext i32 %n to i64
+; CHECK-NEXT:   %3 = inttoptr i64 %2 to i8*
+; CHECK-NEXT:   call void @insert_argument(i8* %trace, i8* nocapture readonly getelementptr inbounds ([2 x i8], [2 x i8]* @1, i32 0, i32 0), i8* %3, i64 4)
+; CHECK-NEXT:   %4 = call double @normal(double 0.000000e+00, double 1.000000e+00)
+; CHECK-NEXT:   %likelihood.call = call double @normal_logpdf(double 0.000000e+00, double 1.000000e+00, double %4)
 ; CHECK-NEXT:   %log_prob_sum = load double, double* %likelihood
-; CHECK-NEXT:   %4 = fadd double %log_prob_sum, %likelihood.call
-; CHECK-NEXT:   store double %4, double* %likelihood
-; CHECK-NEXT:   %insert_choice.i = load void (i8*, i8*, double, i8*, i64)*, void (i8*, i8*, double, i8*, i64)** @insert_choice
-; CHECK-NEXT:   %5 = bitcast double %3 to i64
-; CHECK-NEXT:   %6 = inttoptr i64 %5 to i8*
-; CHECK-NEXT:   call void %insert_choice.i(i8* %trace, i8* nocapture readonly getelementptr inbounds ([2 x i8], [2 x i8]* @.str.1, i64 0, i64 0), double %likelihood.call, i8* %6, i64 8)
-; CHECK-NEXT:   %7 = call double @normal(double 0.000000e+00, double 1.000000e+00)
-; CHECK-NEXT:   %likelihood.call1 = call double @normal_logpdf(double 0.000000e+00, double 1.000000e+00, double %7)
+; CHECK-NEXT:   %5 = fadd double %log_prob_sum, %likelihood.call
+; CHECK-NEXT:   store double %5, double* %likelihood
+; CHECK-NEXT:   %6 = bitcast double %4 to i64
+; CHECK-NEXT:   %7 = inttoptr i64 %6 to i8*
+; CHECK-NEXT:   call void @insert_choice(i8* %trace, i8* nocapture readonly getelementptr inbounds ([2 x i8], [2 x i8]* @.str.1, i64 0, i64 0), double %likelihood.call, i8* %7, i64 8)
+; CHECK-NEXT:   %8 = call double @normal(double 0.000000e+00, double 1.000000e+00)
+; CHECK-NEXT:   %likelihood.call1 = call double @normal_logpdf(double 0.000000e+00, double 1.000000e+00, double %8)
 ; CHECK-NEXT:   %log_prob_sum1 = load double, double* %likelihood
-; CHECK-NEXT:   %8 = fadd double %log_prob_sum1, %likelihood.call1
-; CHECK-NEXT:   store double %8, double* %likelihood
-; CHECK-NEXT:   %insert_choice.i4 = load void (i8*, i8*, double, i8*, i64)*, void (i8*, i8*, double, i8*, i64)** @insert_choice
-; CHECK-NEXT:   %9 = bitcast double %7 to i64
-; CHECK-NEXT:   %10 = inttoptr i64 %9 to i8*
-; CHECK-NEXT:   call void %insert_choice.i4(i8* %trace, i8* nocapture readonly getelementptr inbounds ([2 x i8], [2 x i8]* @.str.2, i64 0, i64 0), double %likelihood.call1, i8* %10, i64 8)
+; CHECK-NEXT:   %9 = fadd double %log_prob_sum1, %likelihood.call1
+; CHECK-NEXT:   store double %9, double* %likelihood
+; CHECK-NEXT:   %10 = bitcast double %8 to i64
+; CHECK-NEXT:   %11 = inttoptr i64 %10 to i8*
+; CHECK-NEXT:   call void @insert_choice(i8* %trace, i8* nocapture readonly getelementptr inbounds ([2 x i8], [2 x i8]* @.str.2, i64 0, i64 0), double %likelihood.call1, i8* %11, i64 8)
 ; CHECK-NEXT:   %cmp19.i = icmp sgt i32 %n, 0
 ; CHECK-NEXT:   br i1 %cmp19.i, label %for.body.preheader.i, label %calculate_loss.exit
 
@@ -130,34 +126,33 @@ entry:
 
 ; CHECK: for.body.i:                                       ; preds = %for.body.i, %for.body.preheader.i
 ; CHECK-NEXT:   %indvars.iv.i = phi i64 [ 0, %for.body.preheader.i ], [ %indvars.iv.next.i, %for.body.i ]
-; CHECK-NEXT:   %loss.021.i = phi double [ 0.000000e+00, %for.body.preheader.i ], [ %18, %for.body.i ]
-; CHECK-NEXT:   %11 = trunc i64 %indvars.iv.i to i32
-; CHECK-NEXT:   %conv2.i = sitofp i32 %11 to double
-; CHECK-NEXT:   %mul1 = fmul double %conv2.i, %3
-; CHECK-NEXT:   %12 = fadd double %mul1, %7
-; CHECK-NEXT:   %13 = call double @normal(double %12, double 1.000000e+00)
-; CHECK-NEXT:   %likelihood.call.i = call double @normal_logpdf(double %12, double 1.000000e+00, double %13)
+; CHECK-NEXT:   %loss.021.i = phi double [ 0.000000e+00, %for.body.preheader.i ], [ %19, %for.body.i ]
+; CHECK-NEXT:   %12 = trunc i64 %indvars.iv.i to i32
+; CHECK-NEXT:   %conv2.i = sitofp i32 %12 to double
+; CHECK-NEXT:   %mul1 = fmul double %conv2.i, %4
+; CHECK-NEXT:   %13 = fadd double %mul1, %8
+; CHECK-NEXT:   %14 = call double @normal(double %13, double 1.000000e+00)
+; CHECK-NEXT:   %likelihood.call.i = call double @normal_logpdf(double %13, double 1.000000e+00, double %14)
 ; CHECK-NEXT:   %log_prob_sum2 = load double, double* %likelihood
-; CHECK-NEXT:   %14 = fadd double %log_prob_sum2, %likelihood.call.i
-; CHECK-NEXT:   store double %14, double* %likelihood
-; CHECK-NEXT:   %insert_choice.i5 = load void (i8*, i8*, double, i8*, i64)*, void (i8*, i8*, double, i8*, i64)** @insert_choice
-; CHECK-NEXT:   %15 = bitcast double %13 to i64
-; CHECK-NEXT:   %16 = inttoptr i64 %15 to i8*
-; CHECK-NEXT:   call void %insert_choice.i5(i8* %trace, i8* nocapture readonly getelementptr inbounds ([11 x i8], [11 x i8]* @.str, i64 0, i64 0), double %likelihood.call.i, i8* %16, i64 8)
+; CHECK-NEXT:   %15 = fadd double %log_prob_sum2, %likelihood.call.i
+; CHECK-NEXT:   store double %15, double* %likelihood
+; CHECK-NEXT:   %16 = bitcast double %14 to i64
+; CHECK-NEXT:   %17 = inttoptr i64 %16 to i8*
+; CHECK-NEXT:   call void @insert_choice(i8* %trace, i8* nocapture readonly getelementptr inbounds ([11 x i8], [11 x i8]* @.str, i64 0, i64 0), double %likelihood.call.i, i8* %17, i64 8)
 ; CHECK-NEXT:   %arrayidx3.i = getelementptr inbounds double, double* %data, i64 %indvars.iv.i
-; CHECK-NEXT:   %17 = load double, double* %arrayidx3.i
-; CHECK-NEXT:   %sub.i = fsub double %13, %17
+; CHECK-NEXT:   %18 = load double, double* %arrayidx3.i
+; CHECK-NEXT:   %sub.i = fsub double %14, %18
 ; CHECK-NEXT:   %mul2 = fmul double %sub.i, %sub.i
-; CHECK-NEXT:   %18 = fadd double %mul2, %loss.021.i
+; CHECK-NEXT:   %19 = fadd double %mul2, %loss.021.i
 ; CHECK-NEXT:   %indvars.iv.next.i = add nuw nsw i64 %indvars.iv.i, 1
 ; CHECK-NEXT:   %exitcond.not.i = icmp eq i64 %indvars.iv.next.i, %wide.trip.count.i
 ; CHECK-NEXT:   br i1 %exitcond.not.i, label %calculate_loss.exit, label %for.body.i
 
 ; CHECK: calculate_loss.exit:                              ; preds = %for.body.i, %entry
-; CHECK-NEXT:   %loss.0.lcssa.i = phi double [ 0.000000e+00, %entry ], [ %18, %for.body.i ]
-; CHECK-NEXT:   %19 = bitcast double %loss.0.lcssa.i to i64
-; CHECK-NEXT:   %20 = inttoptr i64 %19 to i8*
-; CHECK-NEXT:   %insert_return = load void (i8*, i8*, i64)*, void (i8*, i8*, i64)** @insert_return
-; CHECK-NEXT:   call void %insert_return(i8* %trace, i8* %20, i64 8)
+; CHECK-NEXT:   %loss.0.lcssa.i = phi double [ 0.000000e+00, %entry ], [ %19, %for.body.i ]
+; CHECK-NEXT:   %20 = bitcast double %loss.0.lcssa.i to i64
+; CHECK-NEXT:   %21 = inttoptr i64 %20 to i8*
+; CHECK-NEXT:   %22 = load void (i8*, i8*, i64)*, void (i8*, i8*, i64)** @insert_return_ptr
+; CHECK-NEXT:   call void %22(i8* %trace, i8* %21, i64 8)
 ; CHECK-NEXT:   ret double %loss.0.lcssa.i
 ; CHECK-NEXT: }
