@@ -12298,7 +12298,13 @@ public:
 
       auto dtrace = lookup(gutils->getNewFromOriginal(trace), Builder2);
       auto daddress = lookup(gutils->getNewFromOriginal(address), Builder2);
-      auto dchoice = diffe(&call, Builder2);
+
+      Value *dchoice;
+      if (TR.query(&call)[{-1}].isPossiblePointer()) {
+        dchoice = gutils->invertPointerM(&call, Builder2);
+      } else {
+        dchoice = diffe(&call, Builder2);
+      }
 
       auto gradient_setter = cast<Function>(
           cast<ValueAsMetadata>(
@@ -12328,7 +12334,8 @@ public:
       auto dtrace = lookup(gutils->getNewFromOriginal(trace), Builder2);
       auto dname = lookup(gutils->getNewFromOriginal(name), Builder2);
       Value *darg;
-      if (arg->getType()->isPointerTy()) {
+
+      if (TR.query(arg)[{-1}].isPossiblePointer()) {
         darg = gutils->invertPointerM(arg, Builder2);
       } else {
         darg = diffe(arg, Builder2);
