@@ -92,12 +92,6 @@ public:
   llvm::CallInst *InsertChoice(llvm::IRBuilder<> &Builder, llvm::Value *address,
                                llvm::Value *score, llvm::Value *choice);
 
-  static llvm::CallInst *InsertChoice(llvm::IRBuilder<> &Builder,
-                                      llvm::FunctionType *interface_type,
-                                      llvm::Value *interface_function,
-                                      llvm::Value *address, llvm::Value *score,
-                                      llvm::Value *choice, llvm::Value *trace);
-
   llvm::CallInst *InsertCall(llvm::IRBuilder<> &Builder, llvm::Value *address,
                              llvm::Value *subtrace);
 
@@ -127,17 +121,6 @@ public:
   llvm::Instruction *GetChoice(llvm::IRBuilder<> &Builder, llvm::Value *address,
                                llvm::Type *choiceType,
                                const llvm::Twine &Name = "");
-
-  static llvm::Instruction *
-  GetChoice(llvm::IRBuilder<> &Builder, llvm::FunctionType *interface_type,
-            llvm::Value *interface_function, llvm::Value *address,
-            llvm::Type *choiceType, llvm::Value *trace,
-            const llvm::Twine &Name = "");
-
-  static llvm::Instruction *
-  HasChoice(llvm::IRBuilder<> &Builder, llvm::FunctionType *interface_type,
-            llvm::Value *interface_function, llvm::Value *address,
-            llvm::Value *observations, const llvm::Twine &Name = "");
 
   llvm::Instruction *HasChoice(llvm::IRBuilder<> &Builder, llvm::Value *address,
                                const llvm::Twine &Name = "");

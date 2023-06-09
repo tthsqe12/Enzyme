@@ -207,26 +207,18 @@ CallInst *TraceUtils::FreeTrace(IRBuilder<> &Builder) {
   return call;
 }
 
-CallInst *TraceUtils::InsertChoice(IRBuilder<> &Builder,
-                                   FunctionType *interface_type,
-                                   Value *interface_function, Value *address,
-                                   Value *score, Value *choice, Value *trace) {
-  Type *size_type = interface_type->getParamType(4);
+CallInst *TraceUtils::InsertChoice(IRBuilder<> &Builder, Value *address,
+                                   Value *score, Value *choice) {
+  Type *size_type = interface->insertChoiceTy()->getParamType(4);
   auto &&[retval, sizeval] = ValueToVoidPtrAndSize(Builder, choice, size_type);
 
   Value *args[] = {trace, address, score, retval, sizeval};
 
-  auto call = Builder.CreateCall(interface_type, interface_function, args);
+  auto call = Builder.CreateCall(interface->insertChoiceTy(),
+                                 interface->insertChoice(Builder), args);
   call->addParamAttr(1, Attribute::ReadOnly);
   call->addParamAttr(1, Attribute::NoCapture);
   return call;
-}
-
-CallInst *TraceUtils::InsertChoice(IRBuilder<> &Builder, Value *address,
-                                   Value *score, Value *choice) {
-  return TraceUtils::InsertChoice(Builder, interface->insertChoiceTy(),
-                                  interface->insertChoice(Builder), address,
-                                  score, choice, trace);
 }
 
 CallInst *TraceUtils::InsertCall(IRBuilder<> &Builder, Value *address,
@@ -334,11 +326,8 @@ CallInst *TraceUtils::GetTrace(IRBuilder<> &Builder, Value *address,
   return call;
 }
 
-Instruction *TraceUtils::GetChoice(IRBuilder<> &Builder,
-                                   FunctionType *interface_type,
-                                   Value *interface_function, Value *address,
-                                   Type *choiceType, Value *trace,
-                                   const Twine &Name) {
+Instruction *TraceUtils::GetChoice(IRBuilder<> &Builder, Value *address,
+                                   Type *choiceType, const Twine &Name) {
   IRBuilder<> AllocaBuilder(Builder.GetInsertBlock()
                                 ->getParent()
                                 ->getEntryBlock()
@@ -346,15 +335,16 @@ Instruction *TraceUtils::GetChoice(IRBuilder<> &Builder,
   AllocaInst *store_dest =
       AllocaBuilder.CreateAlloca(choiceType, nullptr, Name + ".ptr");
   auto preallocated_size = choiceType->getPrimitiveSizeInBits() / 8;
-  Type *size_type = interface_type->getParamType(3);
+  Type *size_type = interface->getChoiceTy()->getParamType(3);
 
   Value *args[] = {
-      trace, address,
+      observations, address,
       Builder.CreatePointerCast(store_dest, Builder.getInt8PtrTy()),
       ConstantInt::get(size_type, preallocated_size)};
 
-  auto call = Builder.CreateCall(interface_type, interface_function, args,
-                                 Name + ".size");
+  auto call =
+      Builder.CreateCall(interface->getChoiceTy(),
+                         interface->getChoice(Builder), args, Name + ".size");
 
 #if LLVM_VERSION_MAJOR >= 14
   call->addAttributeAtIndex(
@@ -369,31 +359,15 @@ Instruction *TraceUtils::GetChoice(IRBuilder<> &Builder,
   return Builder.CreateLoad(choiceType, store_dest, "from.trace." + Name);
 }
 
-Instruction *TraceUtils::GetChoice(IRBuilder<> &Builder, Value *address,
-                                   Type *choiceType, const Twine &Name) {
-  return TraceUtils::GetChoice(Builder, interface->getChoiceTy(),
-                               interface->getChoice(Builder), address,
-                               choiceType, observations, Name);
-}
-
-Instruction *TraceUtils::HasChoice(IRBuilder<> &Builder,
-                                   FunctionType *interface_type,
-                                   Value *interface_function, Value *address,
-                                   Value *observations, const Twine &Name) {
+Instruction *TraceUtils::HasChoice(IRBuilder<> &Builder, Value *address,
+                                   const Twine &Name) {
   Value *args[]{observations, address};
 
-  auto call =
-      Builder.CreateCall(interface_type, interface_function, args, Name);
+  auto call = Builder.CreateCall(interface->hasChoiceTy(),
+                                 interface->hasChoice(Builder), args, Name);
   call->addParamAttr(1, Attribute::ReadOnly);
   call->addParamAttr(1, Attribute::NoCapture);
   return call;
-}
-
-Instruction *TraceUtils::HasChoice(IRBuilder<> &Builder, Value *address,
-                                   const Twine &Name) {
-  return TraceUtils::HasChoice(Builder, interface->hasChoiceTy(),
-                               interface->hasChoice(Builder), address,
-                               observations, Name);
 }
 
 Instruction *TraceUtils::HasCall(IRBuilder<> &Builder, Value *address,
@@ -421,9 +395,7 @@ Instruction *TraceUtils::SampleOrCondition(IRBuilder<> &Builder,
     return sample_call;
   }
   case ProbProgMode::Condition: {
-    Instruction *hasChoice = TraceUtils::HasChoice(
-        Builder, interface->hasChoiceTy(), interface->hasChoice(Builder),
-        address, observations, "has.choice." + Name);
+    Instruction *hasChoice = HasChoice(Builder, address, "has.choice." + Name);
 
     Value *ThenChoice, *ElseChoice;
     BasicBlock *ThenBlock = BasicBlock::Create(Context);
@@ -438,9 +410,7 @@ Instruction *TraceUtils::SampleOrCondition(IRBuilder<> &Builder,
 
     Builder.CreateCondBr(hasChoice, ThenBlock, ElseBlock);
     Builder.SetInsertPoint(ThenBlock);
-    ThenChoice = GetChoice(Builder, interface->getChoiceTy(),
-                           interface->getChoice(Builder), address,
-                           sample_fn->getReturnType(), trace, Name);
+    ThenChoice = GetChoice(Builder, address, sample_fn->getReturnType(), Name);
     Builder.CreateBr(EndBlock);
 
     Builder.SetInsertPoint(ElseBlock);
