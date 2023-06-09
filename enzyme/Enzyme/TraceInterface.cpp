@@ -406,7 +406,7 @@ Function *DynamicTraceInterface::MaterializeInterfaceFunction(
 
   IRBuilder<> WrapperBuilder(Entry);
 
-  auto ToWrap = WrapperBuilder.CreateLoad(pty, global);
+  auto ToWrap = WrapperBuilder.CreateLoad(pty, global, Name);
   auto Args = SmallVector<Value *>(make_pointer_range(F->args()));
   auto Call = WrapperBuilder.CreateCall(FTy, ToWrap, Args);
 

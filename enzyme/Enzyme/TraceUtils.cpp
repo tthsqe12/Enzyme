@@ -428,15 +428,12 @@ Instruction *TraceUtils::SampleOrCondition(IRBuilder<> &Builder,
   }
 }
 
-std::map<std::pair<StringRef, FunctionType *>, Function *>
-    cachedOutlinedFunctions;
-
 CallInst *TraceUtils::CreateOutlinedFunction(
     IRBuilder<> &Builder,
     function_ref<void(IRBuilder<> &, TraceUtils *, ArrayRef<Argument *>)>
         Outlined,
     Type *RetTy, ArrayRef<Value *> Arguments, bool needsLikelihood,
-    StringRef Name) {
+    const Twine &Name) {
   SmallVector<Type *, 4> Tys;
   SmallVector<Value *, 4> Vals;
   Module *M = Builder.GetInsertBlock()->getModule();
@@ -460,13 +457,6 @@ CallInst *TraceUtils::CreateOutlinedFunction(
   Tys.push_back(trace->getType());
 
   FunctionType *FTy = FunctionType::get(RetTy, Tys, false);
-
-  auto found = cachedOutlinedFunctions.find({Name, FTy});
-  if (found != cachedOutlinedFunctions.end()) {
-    Function *F = found->second;
-    return Builder.CreateCall(FTy, F, Vals);
-  }
-
   Function *F =
       Function::Create(FTy, Function::LinkageTypes::InternalLinkage, Name, M);
   F->addFnAttr(Attribute::AlwaysInline);
@@ -494,8 +484,6 @@ CallInst *TraceUtils::CreateOutlinedFunction(
                                         likelihood_arg, interface);
   IRBuilder<> OutlineBuilder(Entry);
   Outlined(OutlineBuilder, &OutlineTutils, Rets);
-
-  cachedOutlinedFunctions[{Name, FTy}] = F;
 
   return Builder.CreateCall(FTy, F, Vals);
 }

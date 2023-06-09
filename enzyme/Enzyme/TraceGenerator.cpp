@@ -121,9 +121,12 @@ void TraceGenerator::handleSampleCall(CallInst &call, CallInst *new_call) {
   SmallVector<Value *, 4> Args(
       make_range(new_call->arg_begin() + 2, new_call->arg_end()));
 
-  Twine name_prefix =
+  Twine sample_call_name =
       (mode == ProbProgMode::Condition ? "condition" : "sample") +
       (call.hasName() ? "_" + call.getName() : "");
+
+  Twine trace_call_name =
+      "trace" + (call.hasName() ? "_" + call.getName() : "");
 
   Function *samplefn = GetFunctionFromValue(new_call->getArgOperand(0));
   Function *likelihoodfn = GetFunctionFromValue(new_call->getArgOperand(1));
@@ -145,7 +148,7 @@ void TraceGenerator::handleSampleCall(CallInst &call, CallInst *new_call) {
   auto sample_call = tutils->CreateOutlinedFunction(
       Builder, OutlinedSample,
       tutils->getTraceInterface()->insertChoiceTy()->getParamType(2), Args,
-      false, name_prefix);
+      false, sample_call_name);
 
 #if LLVM_VERSION_MAJOR >= 14
   sample_call->addAttributeAtIndex(
@@ -198,7 +201,8 @@ void TraceGenerator::handleSampleCall(CallInst &call, CallInst *new_call) {
   };
 
   auto trace_call = tutils->CreateOutlinedFunction(
-      Builder, OutlinedTrace, Builder.getVoidTy(), trace_args, false);
+      Builder, OutlinedTrace, Builder.getVoidTy(), trace_args, false,
+      trace_call_name);
 
 #if LLVM_VERSION_MAJOR >= 14
   trace_call->addAttributeAtIndex(

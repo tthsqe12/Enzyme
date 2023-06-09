@@ -139,7 +139,7 @@ public:
                               llvm::ArrayRef<llvm::Argument *>)>
           Outlined,
       llvm::Type *RetTy, llvm::ArrayRef<llvm::Value *> Arguments,
-      bool needsLikelihood = true, llvm::StringRef = "");
+      bool needsLikelihood = true, const llvm::Twine &Name = "");
 };
 
 #endif /* TraceUtils_h */
