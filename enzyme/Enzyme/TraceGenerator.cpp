@@ -86,11 +86,9 @@ void TraceGenerator::visitFunction(Function &F) {
       OutlineBuilder.CreateRetVoid();
     };
 
-    Twine Name = "outline_insert_argument" +
-                 (arg->hasName() ? "_" + arg->getName() : "");
-
     auto call = tutils->CreateOutlinedFunction(
-        Builder, Outlined, Builder.getVoidTy(), {name, arg}, false, Name);
+        Builder, Outlined, Builder.getVoidTy(), {name, arg}, false,
+        "outline_insert_argument_" + arg->getName());
 
 #if LLVM_VERSION_MAJOR >= 14
     call->addAttributeAtIndex(
@@ -121,13 +119,6 @@ void TraceGenerator::handleSampleCall(CallInst &call, CallInst *new_call) {
   SmallVector<Value *, 4> Args(
       make_range(new_call->arg_begin() + 2, new_call->arg_end()));
 
-  Twine sample_call_name =
-      (mode == ProbProgMode::Condition ? "condition" : "sample") +
-      (call.hasName() ? "_" + call.getName() : "");
-
-  Twine trace_call_name =
-      "trace" + (call.hasName() ? "_" + call.getName() : "");
-
   Function *samplefn = GetFunctionFromValue(new_call->getArgOperand(0));
   Function *likelihoodfn = GetFunctionFromValue(new_call->getArgOperand(1));
 
@@ -145,10 +136,13 @@ void TraceGenerator::handleSampleCall(CallInst &call, CallInst *new_call) {
     OutlineBuilder.CreateRet(choice);
   };
 
+  std::string mode_str =
+      mode == ProbProgMode::Condition ? "condition" : "sample";
+
   auto sample_call = tutils->CreateOutlinedFunction(
       Builder, OutlinedSample,
       tutils->getTraceInterface()->insertChoiceTy()->getParamType(2), Args,
-      false, sample_call_name);
+      false, mode_str + "_" + call.getName());
 
 #if LLVM_VERSION_MAJOR >= 14
   sample_call->addAttributeAtIndex(
@@ -202,7 +196,7 @@ void TraceGenerator::handleSampleCall(CallInst &call, CallInst *new_call) {
 
   auto trace_call = tutils->CreateOutlinedFunction(
       Builder, OutlinedTrace, Builder.getVoidTy(), trace_args, false,
-      trace_call_name);
+      "trace_" + call.getName());
 
 #if LLVM_VERSION_MAJOR >= 14
   trace_call->addAttributeAtIndex(
